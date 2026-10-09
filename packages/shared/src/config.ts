@@ -28,10 +28,18 @@ export function loadOrCreateConfig(): AgentCivConfig {
   const file = join(dir, "config.json");
   try {
     return JSON.parse(readFileSync(file, "utf8")) as AgentCivConfig;
-  } catch {
-    const config: AgentCivConfig = { port: DEFAULT_PORT, token: randomBytes(24).toString("hex") };
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
-    return config;
+  } catch (err) {
+    // Only a missing file gets a fresh token; a broken one must fail loudly, not rotate the token.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+  const config: AgentCivConfig = { port: DEFAULT_PORT, token: randomBytes(24).toString("hex") };
+  mkdirSync(dir, { recursive: true });
+  try {
+    writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+  } catch (err) {
+    // Another process created it first; use its token.
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return loadOrCreateConfig();
+    throw err;
+  }
+  return config;
 }

@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "bin": { "agent-civ": "./src/cli.ts" },
-  "scripts": { "start": "tsx src/cli.ts" },
+  "scripts": { "start": "tsx src/cli.ts", "test": "tsx --test src/*.test.ts" },
   "dependencies": { "@agent-civ/shared": "workspace:*" }
 }

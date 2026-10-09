@@ -9,10 +9,6 @@ import { appDataDir, HOOK_PATH, loadOrCreateConfig, TOKEN_HEADER } from "@agent-
 type Behavior = "allow" | "deny";
 
 interface Pending {
-  id: number;
-  sessionId: string;
-  toolName: string;
-  toolInput: unknown;
   receivedAt: number;
   resolve: (behavior: Behavior) => void;
 }
@@ -24,6 +20,10 @@ const logFile = join(logDir, "hooks.jsonl");
 
 /** SPIKE_AUTO=allow|deny answers every PermissionRequest at once; default holds it for a manual answer. */
 const autoReply = process.env.SPIKE_AUTO as Behavior | undefined;
+if (autoReply && autoReply !== "allow" && autoReply !== "deny") {
+  console.error(`SPIKE_AUTO must be "allow" or "deny", got "${autoReply}"`);
+  process.exit(1);
+}
 
 const pending = new Map<number, Pending>();
 let nextId = 1;
@@ -72,14 +72,7 @@ app.post(HOOK_PATH, async (request, reply) => {
 
   const id = nextId++;
   const behavior = await new Promise<Behavior | "cancelled">((resolve) => {
-    pending.set(id, {
-      id,
-      sessionId: String(body.session_id),
-      toolName: String(body.tool_name),
-      toolInput: body.tool_input,
-      receivedAt: Date.now(),
-      resolve,
-    });
+    pending.set(id, { receivedAt: Date.now(), resolve });
     // Claude dropping the connection means the request was settled elsewhere (terminal prompt, timeout, interrupt).
     reply.raw.on("close", () => {
       if (!reply.raw.writableFinished) resolve("cancelled");
@@ -94,17 +87,6 @@ app.post(HOOK_PATH, async (request, reply) => {
   console.log(`  ⚑ [${id}] ${behavior} after ${(heldMs / 1000).toFixed(1)}s`);
   if (behavior === "cancelled") return reply;
   return permissionResponse(behavior);
-});
-
-app.get("/spike/pending", async (request, reply) => {
-  if (request.headers[TOKEN_HEADER] !== config.token) return reply.code(401).send();
-  return [...pending.values()].map(({ resolve, ...p }) => p);
-});
-
-app.post<{ Params: { id: string }; Body: { behavior: Behavior } }>("/spike/decide/:id", async (request, reply) => {
-  if (request.headers[TOKEN_HEADER] !== config.token) return reply.code(401).send();
-  const ok = decide(Number(request.params.id), request.body.behavior);
-  return reply.code(ok ? 200 : 404).send({ ok });
 });
 
 createInterface({ input: process.stdin }).on("line", (line) => {

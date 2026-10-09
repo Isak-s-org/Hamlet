@@ -7,7 +7,8 @@
     "daemon": "pnpm --filter @agent-civ/daemon dev",
     "install-hooks": "pnpm --filter @agent-civ/installer start install",
     "uninstall-hooks": "pnpm --filter @agent-civ/installer start uninstall",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "test": "pnpm -r test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -36,6 +36,6 @@ export const TERMINAL_HEADERS = {
   "X-Wt-Session": "$WT_SESSION",
 } as const;
 
-export const HOOK_ENV_VARS = ["CMUX_SURFACE_ID", "CMUX_WORKSPACE_ID", "TERM_PROGRAM", "WT_SESSION"] as const;
+export const HOOK_ENV_VARS = Object.values(TERMINAL_HEADERS).map((v) => v.slice(1));
 
 export const TOKEN_HEADER = "x-agent-civ-token";
