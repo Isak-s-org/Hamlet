@@ -1,0 +1,11 @@
+{
+  "name": "@agent-civ/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "tsx src/main.ts" },
+  "dependencies": {
+    "@agent-civ/shared": "workspace:*",
+    "fastify": "^5.0.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@agent-civ/installer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "agent-civ": "./src/cli.ts" },
+  "scripts": { "start": "tsx src/cli.ts" },
+  "dependencies": { "@agent-civ/shared": "workspace:*" }
+}
