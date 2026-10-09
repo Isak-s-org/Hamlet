@@ -1,10 +1,21 @@
-// M0 hook spike — throwaway. Logs every hook event and holds PermissionRequests so we
-// can answer the spec's open questions before designing the real daemon.
+// M0 hook spike, now also feeding the web slice: logs every hook event, holds PermissionRequests,
+// and streams bot state to the UI over SSE.
+import { execFile } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import type { ServerResponse } from "node:http";
+import { promisify } from "node:util";
 import Fastify from "fastify";
-import { appDataDir, HOOK_PATH, loadOrCreateConfig, TOKEN_HEADER } from "@hamlet/shared";
+import {
+  API_PREFIX,
+  appDataDir,
+  HOOK_PATH,
+  loadOrCreateConfig,
+  TOKEN_HEADER,
+  type Bot,
+  type BotState,
+} from "@hamlet/shared";
 
 type Behavior = "allow" | "deny";
 
@@ -48,6 +59,99 @@ function decide(id: number, behavior: Behavior): boolean {
   return true;
 }
 
+const run = promisify(execFile);
+const gitCache = new Map<string, Promise<{ repo: string; branch: string }>>();
+
+/** Repo = main checkout name (so worktrees share a city), branch = current branch. */
+function gitPlace(cwd: string) {
+  let place = gitCache.get(cwd);
+  if (!place) {
+    const git = (...args: string[]) => run("git", args, { cwd }).then((r) => r.stdout.trim());
+    place = Promise.all([git("rev-parse", "--path-format=absolute", "--git-common-dir"), git("branch", "--show-current")])
+      .then(([common, branch]) => ({
+        repo: basename(common.endsWith(".git") ? dirname(common) : common),
+        branch: branch || "detached",
+      }))
+      .catch(() => ({ repo: basename(cwd) || "/", branch: "-" }));
+    gitCache.set(cwd, place);
+    // Branches change under a running session; re-ask git now and then.
+    setTimeout(() => gitCache.delete(cwd), 10_000).unref();
+  }
+  return place;
+}
+
+const bots = new Map<string, Bot>();
+const streams = new Set<ServerResponse>();
+
+const STATE_FOR: Partial<Record<string, BotState>> = {
+  Stop: "idle",
+  StopFailure: "errored",
+  PermissionRequest: "needs_input",
+};
+
+function broadcast(): void {
+  const data = `data: ${JSON.stringify({ bots: [...bots.values()] })}\n\n`;
+  for (const s of streams) s.write(data);
+}
+
+function setState(bot: Bot, state: BotState): void {
+  if (bot.state !== state) bot.since = Date.now();
+  bot.state = state;
+}
+
+const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+/** Unset env vars arrive as empty headers; only well-formed ids ever reach a command line. */
+function terminalFrom(headers: Record<string, unknown>): Bot["terminal"] {
+  const [surfaceId, workspaceId, wt] = ["x-cmux-surface-id", "x-cmux-workspace-id", "x-wt-session"].map((h) => String(headers[h] ?? ""));
+  if (UUID.test(surfaceId!) && UUID.test(workspaceId!)) return { kind: "cmux", surfaceId: surfaceId!, workspaceId: workspaceId! };
+  if (UUID.test(wt!)) return { kind: "wt", session: wt! };
+}
+
+async function focusTerminal(t: NonNullable<Bot["terminal"]>): Promise<void> {
+  if (t.kind === "cmux") {
+    await run("cmux", ["focus-panel", "--panel", t.surfaceId, "--workspace", t.workspaceId]);
+    if (process.platform === "darwin") await run("open", ["-b", "com.cmuxterm.app"]);
+    return;
+  }
+  // shortcut: WT has no focus-tab-by-session API, so this only raises the window; upgrade if WT adds one.
+  await run("powershell", [
+    "-NoProfile",
+    "-Command",
+    "$p = Get-Process WindowsTerminal -ErrorAction Stop | Select-Object -First 1; (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null",
+  ]);
+}
+
+async function track(body: Record<string, any>, headers: Record<string, unknown>): Promise<Bot | undefined> {
+  const event = String(body.hook_event_name);
+  const sessionId = String(body.session_id ?? "");
+  if (!sessionId) return;
+  if (event === "SessionEnd") {
+    bots.delete(sessionId);
+    broadcast();
+    return;
+  }
+  const cwd = String(body.cwd ?? bots.get(sessionId)?.cwd ?? "");
+  const place = await gitPlace(cwd);
+  // SessionStart can be missing (see SPIKE.md), so any event creates the bot.
+  const bot = bots.get(sessionId) ?? { sessionId, cwd, ...place, state: "working", since: Date.now() };
+  Object.assign(bot, { cwd, ...place });
+  const terminal = terminalFrom(headers);
+  if (terminal) bot.terminal = terminal;
+  bots.set(sessionId, bot);
+  // Subagent hooks (agent_id set) outlive the main thread's Stop, so only a subagent's permission
+  // prompt says anything about the bot. idle_prompt also covers interrupts, which send no Stop.
+  const subagent = body.agent_id !== undefined && event !== "PermissionRequest";
+  const state =
+    event === "Notification"
+      ? body.notification_type === "idle_prompt" ? "idle" : undefined
+      : subagent ? undefined : STATE_FOR[event] ?? "working";
+  if (state) setState(bot, state);
+  if (event !== "PermissionRequest" && !subagent) delete bot.permission;
+  broadcast();
+  return bot;
+}
+
 const app = Fastify({ bodyLimit: 20 * 1024 * 1024, requestTimeout: 0 });
 
 app.post(HOOK_PATH, async (request, reply) => {
@@ -58,6 +162,7 @@ app.post(HOOK_PATH, async (request, reply) => {
 
   const body = request.body as Record<string, any>;
   const event = String(body.hook_event_name);
+  const bot = await track(body, request.headers);
   const headers = Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.startsWith("x-")));
   delete headers[TOKEN_HEADER];
   log({ kind: "hook", event, headers, body });
@@ -73,6 +178,10 @@ app.post(HOOK_PATH, async (request, reply) => {
   const id = nextId++;
   const behavior = await new Promise<Behavior | "cancelled">((resolve) => {
     pending.set(id, { receivedAt: Date.now(), resolve });
+    if (bot) {
+      bot.permission = { id, toolName: String(body.tool_name), toolInput: body.tool_input, cwd: bot.cwd };
+      broadcast();
+    }
     // Claude dropping the connection means the request was settled elsewhere (terminal prompt, timeout, interrupt).
     reply.raw.on("close", () => {
       if (!reply.raw.writableFinished) resolve("cancelled");
@@ -82,11 +191,50 @@ app.post(HOOK_PATH, async (request, reply) => {
   });
   const heldMs = Date.now() - pending.get(id)!.receivedAt;
   pending.delete(id);
+  if (bot?.permission?.id === id) {
+    delete bot.permission;
+    setState(bot, "working");
+    broadcast();
+  }
 
   log({ kind: "permission-outcome", id, sessionId: body.session_id, outcome: behavior, heldMs });
   console.log(`  ⚑ [${id}] ${behavior} after ${(heldMs / 1000).toFixed(1)}s`);
   if (behavior === "cancelled") return reply;
   return permissionResponse(behavior);
+});
+
+app.addHook("onRequest", async (request, reply) => {
+  if (request.url.startsWith(API_PREFIX) && request.headers[TOKEN_HEADER] !== config.token) {
+    return reply.code(401).send();
+  }
+});
+
+app.get(`${API_PREFIX}/stream`, (request, reply) => {
+  reply.hijack();
+  const res = reply.raw;
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  res.write(`data: ${JSON.stringify({ bots: [...bots.values()] })}\n\n`);
+  streams.add(res);
+  request.raw.on("close", () => streams.delete(res));
+});
+
+app.post(`${API_PREFIX}/decide`, async (request, reply) => {
+  const { id, behavior } = request.body as { id?: unknown; behavior?: unknown };
+  if (typeof id !== "number" || (behavior !== "allow" && behavior !== "deny")) return reply.code(400).send();
+  return reply.code(decide(id, behavior) ? 204 : 404).send();
+});
+
+app.post(`${API_PREFIX}/terminal`, async (request, reply) => {
+  const { sessionId } = request.body as { sessionId?: unknown };
+  const terminal = typeof sessionId === "string" ? bots.get(sessionId)?.terminal : undefined;
+  if (!terminal) return reply.code(404).send();
+  try {
+    await focusTerminal(terminal);
+  } catch (e) {
+    const msg = String((e as { stderr?: string }).stderr || (e as Error).message).trim();
+    return reply.code(502).send({ error: msg });
+  }
+  return reply.code(204).send();
 });
 
 createInterface({ input: process.stdin }).on("line", (line) => {

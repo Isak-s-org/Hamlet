@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hamlet</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#1b1c20" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas></canvas>
+      <div class="labels"></div>
+      <div class="loading" hidden><span>Daemon offline. Start it with pnpm daemon.</span></div>
+      <div class="intro">
+        <div class="intro-card">
+          <span class="title">HAMLET</span>
+          <div class="bar" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+          <span class="stage">Starting renderer</span>
+        </div>
+      </div>
+
+      <aside class="panel sidebar">
+        <header>
+          <span class="title">HAMLET</span>
+          <button class="ghost collapse" data-act="sidebar" aria-label="Collapse sidebar">‹</button>
+        </header>
+        <ul class="cities"></ul>
+        <footer><span class="repo-count"></span></footer>
+      </aside>
+
+      <section class="panel tray" aria-label="Waiting bots" hidden>
+        <header>
+          <span class="title">WAITING <span class="amber waiting-count"></span></span>
+          <button class="primary" data-act="next" title="Next waiting bot (N)">[N] NEXT</button>
+        </header>
+        <ol></ol>
+      </section>
+
+      <div class="panel tools">
+        <button class="tool-btn" data-act="zoom-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
+        <button class="tool-btn" data-act="zoom-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+        <button class="tool-btn" data-act="frame" title="Frame world (F)" aria-label="Frame world">⤢</button>
+        <button class="tool-btn" data-act="help" title="Controls (?)" aria-label="Controls">?</button>
+      </div>
+
+      <div class="panel bubble" role="dialog"></div>
+
+      <button class="cog" data-act="settings" title="Settings (,)" aria-label="Settings" aria-expanded="false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+      </button>
+
+      <section class="panel settings" role="dialog" aria-label="Settings" hidden>
+        <header>
+          <span class="title">SETTINGS</span>
+          <button class="ghost" data-act="settings" aria-label="Close">ESC</button>
+        </header>
+        <nav class="tabs" role="tablist" aria-label="Settings sections"></nav>
+        <div class="tabpanel" role="tabpanel"></div>
+        <footer>
+          <span>SAVED ON THIS DEVICE</span>
+          <button class="reset" data-act="reset">RESET</button>
+        </footer>
+      </section>
+
+      <div class="scrim" data-act="help" hidden>
+        <div class="panel help" role="dialog" aria-label="Controls">
+          <header>
+            <span class="title">CONTROLS</span>
+            <button class="ghost" data-act="help" aria-label="Close">ESC</button>
+          </header>
+          <div class="cols">
+            <div class="col">
+              <span class="kicker">CAMERA</span>
+              <div class="line"><span>Pan</span><span class="keys"><kbd>Drag</kbd></span></div>
+              <div class="line"><span>Pan</span><span class="keys"><kbd>WASD</kbd><kbd>Arrows</kbd></span></div>
+              <div class="line"><span>Pan at screen edge</span><span class="keys"><kbd>Mouse</kbd></span></div>
+              <div class="line"><span>Zoom to cursor</span><span class="keys"><kbd>Scroll</kbd></span></div>
+              <div class="line"><span>Zoom</span><span class="keys"><kbd>+</kbd><kbd>−</kbd></span></div>
+              <div class="line"><span>Focus a spot</span><span class="keys"><kbd>Double-click</kbd></span></div>
+              <div class="line"><span>Frame world</span><span class="keys"><kbd>F</kbd></span></div>
+            </div>
+            <div class="col">
+              <span class="kicker">BOTS</span>
+              <div class="line"><span>Open bubble</span><span class="keys"><kbd>Click</kbd></span></div>
+              <div class="line"><span>Next waiting bot</span><span class="keys"><kbd>N</kbd></span></div>
+              <div class="line"><span>Allow / Deny</span><span class="keys"><kbd>A</kbd><kbd>D</kbd></span></div>
+              <div class="line"><span>Open terminal</span><span class="keys"><kbd>T</kbd></span></div>
+              <div class="line"><span>Close</span><span class="keys"><kbd>Esc</kbd></span></div>
+              <div class="line"><span>Settings</span><span class="keys"><kbd>,</kbd></span></div>
+              <div class="line"><span>This panel</span><span class="keys"><kbd>?</kbd></span></div>
+              <p>While a permission request is open, A and D answer it instead of panning.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
