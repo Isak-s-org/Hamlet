@@ -466,7 +466,6 @@ try {
     options: opts(),
     callbacks: { onSelect: (id) => select(id), permissionOpen: () => !!selBot()?.permission },
   });
-  (window as unknown as { __civ: World }).__civ = world;
   progress(0.35, "Connecting to daemon");
   await reposReady;
   progress(0.6, "Raising terrain");

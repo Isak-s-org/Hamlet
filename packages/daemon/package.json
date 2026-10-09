@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/main.ts"
+    "dev": "tsx src/main.ts",
+    "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
     "@hamlet/shared": "workspace:*",

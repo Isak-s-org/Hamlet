@@ -1,7 +1,7 @@
 // M0 hook spike, now also feeding the web slice: logs every hook event, holds PermissionRequests,
 // and streams bot state to the UI over SSE.
 import { execFile } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ServerResponse } from "node:http";
@@ -14,8 +14,8 @@ import {
   loadOrCreateConfig,
   TOKEN_HEADER,
   type Bot,
-  type BotState,
 } from "@hamlet/shared";
+import { bots, cwdOf, hold, release, sweep, track } from "./bots.js";
 
 type Behavior = "allow" | "deny";
 
@@ -28,6 +28,10 @@ const config = loadOrCreateConfig();
 const logDir = join(appDataDir(), "spike-logs");
 mkdirSync(logDir, { recursive: true });
 const logFile = join(logDir, "hooks.jsonl");
+// Full bodies hold file contents and command output, so they are opt-in and owner-only.
+const logBodies = process.env.SPIKE_LOG === "1";
+appendFileSync(logFile, "", { mode: 0o600 });
+chmodSync(logFile, 0o600);
 
 /** SPIKE_AUTO=allow|deny answers every PermissionRequest at once; default holds it for a manual answer. */
 const autoReply = process.env.SPIKE_AUTO as Behavior | undefined;
@@ -66,6 +70,7 @@ const gitCache = new Map<string, Promise<{ repo: string; branch: string }>>();
 function gitPlace(cwd: string) {
   let place = gitCache.get(cwd);
   if (!place) {
+    if (!cwd) return Promise.resolve({ repo: "?", branch: "-" });
     const git = (...args: string[]) => run("git", args, { cwd }).then((r) => r.stdout.trim());
     place = Promise.all([git("rev-parse", "--path-format=absolute", "--git-common-dir"), git("branch", "--show-current")])
       .then(([common, branch]) => ({
@@ -80,33 +85,15 @@ function gitPlace(cwd: string) {
   return place;
 }
 
-const bots = new Map<string, Bot>();
 const streams = new Set<ServerResponse>();
-
-const STATE_FOR: Partial<Record<string, BotState>> = {
-  Stop: "idle",
-  StopFailure: "errored",
-  PermissionRequest: "needs_input",
-};
 
 function broadcast(): void {
   const data = `data: ${JSON.stringify({ bots: [...bots.values()] })}\n\n`;
   for (const s of streams) s.write(data);
 }
 
-function setState(bot: Bot, state: BotState): void {
-  if (bot.state !== state) bot.since = Date.now();
-  bot.state = state;
-}
-
-const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-
-/** Unset env vars arrive as empty headers; only well-formed ids ever reach a command line. */
-function terminalFrom(headers: Record<string, unknown>): Bot["terminal"] {
-  const [surfaceId, workspaceId, wt] = ["x-cmux-surface-id", "x-cmux-workspace-id", "x-wt-session"].map((h) => String(headers[h] ?? ""));
-  if (UUID.test(surfaceId!) && UUID.test(workspaceId!)) return { kind: "cmux", surfaceId: surfaceId!, workspaceId: workspaceId! };
-  if (UUID.test(wt!)) return { kind: "wt", session: wt! };
-}
+// shortcut: 6 h without any hook event counts as dead; a long-idle live session reappears on its next event.
+setInterval(() => sweep(6 * 3600_000) && broadcast(), 60_000).unref();
 
 async function focusTerminal(t: NonNullable<Bot["terminal"]>): Promise<void> {
   if (t.kind === "cmux") {
@@ -122,50 +109,24 @@ async function focusTerminal(t: NonNullable<Bot["terminal"]>): Promise<void> {
   ]);
 }
 
-async function track(body: Record<string, any>, headers: Record<string, unknown>): Promise<Bot | undefined> {
-  const event = String(body.hook_event_name);
-  const sessionId = String(body.session_id ?? "");
-  if (!sessionId) return;
-  if (event === "SessionEnd") {
-    bots.delete(sessionId);
-    broadcast();
-    return;
-  }
-  const cwd = String(body.cwd ?? bots.get(sessionId)?.cwd ?? "");
-  const place = await gitPlace(cwd);
-  // SessionStart can be missing (see SPIKE.md), so any event creates the bot.
-  const bot = bots.get(sessionId) ?? { sessionId, cwd, ...place, state: "working", since: Date.now() };
-  Object.assign(bot, { cwd, ...place });
-  const terminal = terminalFrom(headers);
-  if (terminal) bot.terminal = terminal;
-  bots.set(sessionId, bot);
-  // Subagent hooks (agent_id set) outlive the main thread's Stop, so only a subagent's permission
-  // prompt says anything about the bot. idle_prompt also covers interrupts, which send no Stop.
-  const subagent = body.agent_id !== undefined && event !== "PermissionRequest";
-  const state =
-    event === "Notification"
-      ? body.notification_type === "idle_prompt" ? "idle" : undefined
-      : subagent ? undefined : STATE_FOR[event] ?? "working";
-  if (state) setState(bot, state);
-  if (event !== "PermissionRequest" && !subagent) delete bot.permission;
-  broadcast();
-  return bot;
-}
-
 const app = Fastify({ bodyLimit: 20 * 1024 * 1024, requestTimeout: 0 });
 
 app.post(HOOK_PATH, async (request, reply) => {
   if (request.headers[TOKEN_HEADER] !== config.token) {
-    log({ kind: "rejected", reason: "bad token", headers: request.headers });
+    log({ kind: "rejected", reason: "bad token" });
     return reply.code(401).send();
   }
 
   const body = request.body as Record<string, any>;
   const event = String(body.hook_event_name);
-  const bot = await track(body, request.headers);
-  const headers = Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.startsWith("x-")));
-  delete headers[TOKEN_HEADER];
-  log({ kind: "hook", event, headers, body });
+  // Every event awaits the same cached git lookup, so a SessionEnd can't overtake an earlier event.
+  const bot = track(body, request.headers, await gitPlace(cwdOf(body)));
+  broadcast();
+  if (logBodies) {
+    const headers = Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.startsWith("x-")));
+    delete headers[TOKEN_HEADER];
+    log({ kind: "hook", event, headers, body });
+  } else log({ kind: "hook", event, sessionId: body.session_id, tool: body.tool_name });
 
   const sid = String(body.session_id ?? "?").slice(0, 8);
   const detail = body.tool_name ?? body.notification_type ?? body.source ?? body.reason ?? "";
@@ -179,7 +140,7 @@ app.post(HOOK_PATH, async (request, reply) => {
   const behavior = await new Promise<Behavior | "cancelled">((resolve) => {
     pending.set(id, { receivedAt: Date.now(), resolve });
     if (bot) {
-      bot.permission = { id, toolName: String(body.tool_name), toolInput: body.tool_input, cwd: bot.cwd };
+      hold(bot.sessionId, { id, toolName: String(body.tool_name), toolInput: body.tool_input, cwd: bot.cwd });
       broadcast();
     }
     // Claude dropping the connection means the request was settled elsewhere (terminal prompt, timeout, interrupt).
@@ -191,11 +152,8 @@ app.post(HOOK_PATH, async (request, reply) => {
   });
   const heldMs = Date.now() - pending.get(id)!.receivedAt;
   pending.delete(id);
-  if (bot?.permission?.id === id) {
-    delete bot.permission;
-    setState(bot, "working");
-    broadcast();
-  }
+  release(id);
+  broadcast();
 
   log({ kind: "permission-outcome", id, sessionId: body.session_id, outcome: behavior, heldMs });
   console.log(`  ⚑ [${id}] ${behavior} after ${(heldMs / 1000).toFixed(1)}s`);

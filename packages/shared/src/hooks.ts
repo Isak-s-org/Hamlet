@@ -32,7 +32,6 @@ export const HOOK_PATH = "/hooks";
 export const TERMINAL_HEADERS = {
   "X-Cmux-Surface-Id": "$CMUX_SURFACE_ID",
   "X-Cmux-Workspace-Id": "$CMUX_WORKSPACE_ID",
-  "X-Term-Program": "$TERM_PROGRAM",
   "X-Wt-Session": "$WT_SESSION",
 } as const;
 

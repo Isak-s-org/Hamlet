@@ -2,7 +2,7 @@ import { THREE } from './materials.js';
 import { Builder, lin, mul } from './builder.js';
 
 export const WATER_Y = -0.35, SAND_Y = 0, GRASS_Y = 0.3, MESA_STEP = 1.1, BOTTOM_Y = -3.4;
-export const VILLAGE_Y = GRASS_Y + 0.12, WALK_Y = VILLAGE_Y;
+export const VILLAGE_Y = GRASS_Y + 0.12;
 export const FIRE_RING = 1.7;
 const SLOT_SPACING = 32, ISLAND_R = 25, CHUNK = 4, FALL = 1.9;
 

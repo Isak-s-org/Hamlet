@@ -27,7 +27,6 @@ export interface World {
   frameAll(): void;
   compile(): Promise<void>;
   reveal(): void;
-  dispose(): void;
 }
 
 export function createWorld(init: {

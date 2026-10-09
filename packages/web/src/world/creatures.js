@@ -13,6 +13,7 @@ const FX = {
   hit: new THREE.MeshBasicNodeMaterial({ colorWrite: false, depthWrite: false }),
   screen: plainMat(0xcfe9ff, { emissive: new THREE.Color(0x8fd0ff), emissiveIntensity: 1.4 }),
 };
+const HIT_GEO = new THREE.SphereGeometry(1, 8, 6);
 const FLAG_GEO = new THREE.PlaneGeometry(0.85, 0.5, 8, 2).translate(0.425, 0, 0);
 const PATCH = [[0, 0, 1.5, 1.2, 0], [0.5, 0.4, 0.8, 0.7, 1], [-0.6, -0.3, 0.7, 0.8, 1], [0.2, -0.65, 0.9, 0.5, 0], [-0.35, 0.6, 0.6, 0.5, 1], [0.75, -0.2, 0.4, 0.4, 1]];
 
@@ -191,7 +192,7 @@ export class CreatureView {
     for (const a of [Math.PI / 4, -Math.PI / 4]) { const p = part(this.mark, 1.3, 0.024, 0.2, 0, 0.012, 0, FX.paint); p.rotation.y = a; p.castShadow = false; p.receiveShadow = true; }
     for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2 + 0.3; const p = part(this.mark, 0.14, 0.024, 0.14, Math.cos(a) * 0.95, 0.012, Math.sin(a) * 0.95, FX.paint); p.castShadow = false; p.receiveShadow = true; }
     this.sparks = Array.from({ length: 4 }, () => { const p = part(this.group, 0.05, 0.05, 0.05, 0, 0, 0, this.rig.kind === 'caveman' ? FX.spark : FX.dust); p.castShadow = false; return p; });
-    this.hitbox = new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.9, this.rig.height * 0.6), 8, 6), FX.hit);
+    this.hitbox = new THREE.Mesh(HIT_GEO, FX.hit); this.hitbox.scale.setScalar(Math.max(0.9, this.rig.height * 0.6));
     this.hitbox.position.y = this.rig.height * 0.5; this.hitbox.userData.sessionId = data.sessionId;
     this.group.add(this.flag, this.patch, this.mark, this.hitbox);
     this.flagK = 0; this.markK = 0;

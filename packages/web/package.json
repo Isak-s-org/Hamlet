@@ -6,7 +6,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader runner",
-    "build": "vite build --configLoader runner",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

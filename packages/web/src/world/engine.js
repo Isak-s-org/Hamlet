@@ -341,7 +341,7 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
     vw = Math.max(1, r.width); vh = Math.max(1, r.height);
     renderer.setSize(vw, vh, false);
   }
-  const ro = new ResizeObserver(resize); ro.observe(canvas.parentElement); resize();
+  new ResizeObserver(resize).observe(canvas.parentElement); resize();
 
   let hour = opts.timeOfDay ?? 16.5, lastNight = null;
   const wx = { mist: 0, rim: opts.rimLight === false ? 0 : 1 };
@@ -430,10 +430,9 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
   }
 
   const timer = new THREE.Timer();
-  let raf = 0, alive = true, errCount = 0, revealT = -1;
+  let errCount = 0, revealT = -1;
   function frame() {
-    if (!alive) return;
-    raf = requestAnimationFrame(frame);
+    requestAnimationFrame(frame);
     try { step(); } catch (e) { if (errCount++ < 3) console.error('[world] ' + e.message + '\n' + e.stack); }
   }
   function step() {
@@ -517,15 +516,6 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
     flyToCity(repo, fh = 36) { const c = cities.get(repo); if (c) flyTo(c.center, fh); },
     zoom(dir) { cs.fhGoal = THREE.MathUtils.clamp(cs.fhGoal * (dir > 0 ? 1.4 : 1 / 1.4), 10, fitFh() * 1.3); cs.anchor = null; },
     frameAll() { if (world) flyTo(world.center, fitFh(), 1.0); },
-    dispose() {
-      alive = false; cancelAnimationFrame(raf); ro.disconnect();
-      canvas.removeEventListener('contextmenu', onContext); canvas.removeEventListener('pointerdown', onDown); canvas.removeEventListener('pointermove', onMove);
-      canvas.removeEventListener('pointerup', onUp); canvas.removeEventListener('pointerleave', onLeave); canvas.removeEventListener('dblclick', onDbl); canvas.removeEventListener('wheel', onWheel);
-      window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur);
-      for (const v of views.values()) v.dispose();
-      for (const l of labelItems) l.el.remove();
-      renderer.dispose();
-    },
   };
   frame();
   return api;

@@ -12,7 +12,7 @@ const args = process.argv.slice(2);
 const command = args[0];
 const yes = args.includes("--yes");
 const settingsArg = args.indexOf("--settings");
-const settingsPath = settingsArg >= 0 ? args[settingsArg + 1]! : join(homedir(), ".claude", "settings.json");
+const settingsPath = settingsArg >= 0 ? args[settingsArg + 1] ?? "" : join(homedir(), ".claude", "settings.json");
 
 const config = loadOrCreateConfig();
 const hookUrl = `http://127.0.0.1:${config.port}${HOOK_PATH}`;
@@ -39,7 +39,7 @@ function describeChange(before: Settings, after: Settings): string[] {
 }
 
 async function main(): Promise<void> {
-  if (command !== "install" && command !== "uninstall") {
+  if ((command !== "install" && command !== "uninstall") || (settingsArg >= 0 && !args[settingsArg + 1])) {
     console.log("usage: hamlet <install|uninstall> [--yes] [--settings <path>]");
     process.exit(1);
   }

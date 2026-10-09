@@ -8,7 +8,8 @@ Throwaway daemon (`packages/daemon/src/main.ts`) that logs every Claude Code hoo
 ```sh
 pnpm install
 pnpm install-hooks        # shows the change to ~/.claude/settings.json, asks before writing
-pnpm daemon               # logs to <app data>/hamlet/spike-logs/hooks.jsonl
+pnpm daemon               # logs event names to <app data>/hamlet/spike-logs/hooks.jsonl
+SPIKE_LOG=1 pnpm daemon   # also logs full hook bodies and headers (file contents, command output)
 ```
 
 Held permission requests print an id; type `a <id>` or `d <id>` in the daemon terminal to answer.
