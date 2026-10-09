@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import Fastify from "fastify";
-import { appDataDir, HOOK_PATH, loadOrCreateConfig, TOKEN_HEADER } from "@agent-civ/shared";
+import { appDataDir, HOOK_PATH, loadOrCreateConfig, TOKEN_HEADER } from "@hamlet/shared";
 
 type Behavior = "allow" | "deny";
 
@@ -36,7 +36,7 @@ function permissionResponse(behavior: Behavior) {
   return {
     hookSpecificOutput: {
       hookEventName: "PermissionRequest",
-      decision: behavior === "allow" ? { behavior } : { behavior, message: "Denied from Agent Civ" },
+      decision: behavior === "allow" ? { behavior } : { behavior, message: "Denied from Hamlet" },
     },
   };
 }
@@ -98,6 +98,6 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 });
 
 await app.listen({ host: "127.0.0.1", port: config.port });
-console.log(`agent-civ spike daemon on http://127.0.0.1:${config.port}${HOOK_PATH}`);
+console.log(`hamlet spike daemon on http://127.0.0.1:${config.port}${HOOK_PATH}`);
 console.log(`logging to ${logFile}`);
 console.log(autoReply ? `auto-replying "${autoReply}" to PermissionRequest` : "holding PermissionRequests for manual answers");

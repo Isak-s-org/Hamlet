@@ -1,18 +1,30 @@
 {
-  "name": "agent-civ",
+  "name": "hamlet",
   "private": true,
+  "description": "A tiny village where your Claude Code sessions live as bots — watch them work and answer their permission requests.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Isak-gerre/hamlet.git"
+  },
+  "packageManager": "pnpm@8.14.3",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "daemon": "pnpm --filter @agent-civ/daemon dev",
-    "install-hooks": "pnpm --filter @agent-civ/installer start install",
-    "uninstall-hooks": "pnpm --filter @agent-civ/installer start uninstall",
-    "typecheck": "tsc -b",
+    "dev": "turbo run dev",
+    "daemon": "pnpm --filter @hamlet/daemon dev",
+    "web": "pnpm --filter @hamlet/web dev",
+    "install-hooks": "pnpm --filter @hamlet/installer start install",
+    "uninstall-hooks": "pnpm --filter @hamlet/installer start uninstall",
+    "typecheck": "tsc -b && pnpm --filter @hamlet/web typecheck",
     "test": "pnpm -r test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
+    "turbo": "^2.11.7",
     "typescript": "^5.6.0"
   }
 }

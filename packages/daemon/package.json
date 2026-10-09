@@ -1,11 +1,14 @@
 {
-  "name": "@agent-civ/daemon",
+  "name": "@hamlet/daemon",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
-  "scripts": { "dev": "tsx src/main.ts" },
+  "scripts": {
+    "dev": "tsx src/main.ts"
+  },
   "dependencies": {
-    "@agent-civ/shared": "workspace:*",
+    "@hamlet/shared": "workspace:*",
     "fastify": "^5.0.0"
   }
 }

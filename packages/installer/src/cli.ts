@@ -1,11 +1,11 @@
 #!/usr/bin/env -S npx tsx
-// `agent-civ install-hooks` / `uninstall-hooks`: merges Agent Civ's HTTP hooks into
+// `hamlet install-hooks` / `uninstall-hooks`: merges Hamlet's HTTP hooks into
 // ~/.claude/settings.json, leaving every other hook untouched.
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { HOOK_ENV_VARS, HOOK_PATH, loadOrCreateConfig } from "@agent-civ/shared";
+import { HOOK_ENV_VARS, HOOK_PATH, loadOrCreateConfig } from "@hamlet/shared";
 import { isOurs, type Settings, withOurs, withoutOurs } from "./settings.js";
 
 const args = process.argv.slice(2);
@@ -40,7 +40,7 @@ function describeChange(before: Settings, after: Settings): string[] {
 
 async function main(): Promise<void> {
   if (command !== "install" && command !== "uninstall") {
-    console.log("usage: agent-civ <install|uninstall> [--yes] [--settings <path>]");
+    console.log("usage: hamlet <install|uninstall> [--yes] [--settings <path>]");
     process.exit(1);
   }
 
@@ -73,9 +73,9 @@ async function main(): Promise<void> {
   // Re-read: Claude Code may have changed the file while we waited for the answer.
   const current = readSettings();
   const backedUp = existsSync(settingsPath);
-  if (backedUp) copyFileSync(settingsPath, `${settingsPath}.agent-civ-backup`);
+  if (backedUp) copyFileSync(settingsPath, `${settingsPath}.hamlet-backup`);
   writeFileSync(settingsPath, JSON.stringify(apply(current), null, 2) + "\n");
-  console.log(`Wrote ${settingsPath}${backedUp ? " (backup: .agent-civ-backup)" : ""}`);
+  console.log(`Wrote ${settingsPath}${backedUp ? " (backup: .hamlet-backup)" : ""}`);
 }
 
 await main();

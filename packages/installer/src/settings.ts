@@ -1,4 +1,4 @@
-// Pure merge logic for Agent Civ's hooks in a Claude Code settings object.
+// Pure merge logic for Hamlet's hooks in a Claude Code settings object.
 import {
   HOOK_ENV_VARS,
   HOOK_EVENTS,
@@ -6,7 +6,7 @@ import {
   PERMISSION_TIMEOUT_SECONDS,
   TERMINAL_HEADERS,
   TOKEN_HEADER,
-} from "@agent-civ/shared";
+} from "@hamlet/shared";
 
 export interface HookHandler {
   type: string;
@@ -25,7 +25,7 @@ export function isOurs(handler: HookHandler): boolean {
   return handler.type === "http" && Object.keys(handler.headers ?? {}).some((k) => k.toLowerCase() === TOKEN_HEADER);
 }
 
-/** Returns settings with all Agent Civ handlers removed, dropping groups and events left empty. */
+/** Returns settings with all Hamlet handlers removed, dropping groups and events left empty. */
 export function withoutOurs(settings: Settings): Settings {
   if (!settings.hooks) return settings;
   const hooks: Record<string, MatcherGroup[]> = {};

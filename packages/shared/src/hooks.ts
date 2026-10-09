@@ -38,4 +38,4 @@ export const TERMINAL_HEADERS = {
 
 export const HOOK_ENV_VARS = Object.values(TERMINAL_HEADERS).map((v) => v.slice(1));
 
-export const TOKEN_HEADER = "x-agent-civ-token";
+export const TOKEN_HEADER = "x-hamlet-token";
