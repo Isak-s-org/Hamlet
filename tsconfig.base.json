@@ -8,6 +8,7 @@
     "skipLibCheck": true,
     "declaration": true,
     "composite": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "types": ["node"]
   }
 }
