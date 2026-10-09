@@ -8,12 +8,12 @@ Throwaway daemon (`packages/daemon/src/main.ts`) that logs every Claude Code hoo
 ```sh
 pnpm install
 pnpm install-hooks        # shows the change to ~/.claude/settings.json, asks before writing
-pnpm daemon               # logs to <app data>/agent-civ/spike-logs/hooks.jsonl
+pnpm daemon               # logs to <app data>/hamlet/spike-logs/hooks.jsonl
 ```
 
 Held permission requests print an id; type `a <id>` or `d <id>` in the daemon terminal to answer.
 `SPIKE_AUTO=allow pnpm daemon` answers everything automatically. `pnpm uninstall-hooks` removes
-only Agent Civ's entries.
+only Hamlet's entries.
 
 ## Findings so far
 
@@ -32,3 +32,13 @@ only Agent Civ's entries.
    normal terminal prompt without a long delay.
 3. **Hold timeout.** Leave a request held; confirm what happens at the 1800 s hook timeout.
 4. **Windows Terminal / desktop app.** Repeat 1–2 there; check `X-Wt-Session` and `cwd` values.
+
+## Web slice
+
+```sh
+pnpm daemon               # in one terminal
+pnpm web                  # in another; open the printed URL (needs a WebGPU browser)
+```
+
+Vite proxies `/api` to the daemon and adds the token, so the browser never sees it. Click a bot or
+press `N` for the next waiting one; `A` / `D` answer its permission request.
