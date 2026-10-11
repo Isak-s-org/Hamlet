@@ -200,6 +200,17 @@ export class CreatureView {
     this.icon = document.createElement('div');
     Object.assign(this.icon.style, { position: 'absolute', left: '0', top: '0', font: "700 11px 'JetBrains Mono', ui-monospace, monospace", minWidth: '22px', height: '22px',
       padding: '0 5px', display: 'none', placeItems: 'center', borderRadius: '3px', pointerEvents: 'none', whiteSpace: 'nowrap', willChange: 'transform', boxSizing: 'border-box' });
+    this.tag = document.createElement('div');
+    this.tag.className = 'tag';
+    this.tag.append(document.createElement('b'), document.createElement('span'));
+  }
+
+  /** Name, plus what the bot is doing while it works. */
+  setTag(name, activity) {
+    const [n, a] = this.tag.children;
+    if (n.textContent !== name) n.textContent = name;
+    if (a.textContent !== activity) a.textContent = activity;
+    a.hidden = !activity;
   }
 
   get focus() { return this.group.position.clone().add(new THREE.Vector3(0, this.rig.height * 0.6, 0)); }
@@ -300,5 +311,5 @@ export class CreatureView {
     }
   }
 
-  dispose() { this.icon.remove(); this.group.removeFromParent(); }
+  dispose() { this.icon.remove(); this.tag.remove(); this.group.removeFromParent(); }
 }

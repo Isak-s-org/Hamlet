@@ -259,12 +259,14 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
       const city = cities.get(b.repo), d = city?.districts.get(b.branch);
       if (!d) continue;
       let v = views.get(b.sessionId);
-      if (!v) { v = new CreatureView(b, d, city, styleOf(opts)); views.set(b.sessionId, v); scene.add(v.group); labels.appendChild(v.icon); }
+      if (!v) { v = new CreatureView(b, d, city, styleOf(opts)); views.set(b.sessionId, v); scene.add(v.group); labels.append(v.icon, v.tag); }
       v.data = b;
+      v.setTag(b.name ?? '', b.state === 'working' ? b.activity ?? 'Thinking…' : '');
     }
   }
 
   let selected = null;
+  const TAG_MAX_FH = 60;
 
   // Input
   const keys = new Set();
@@ -481,8 +483,12 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
       const newSmoke = smokes.find((s) => s.group.position.distanceToSquared(city.fire) < 0.01);
       v.group.visible = !(newSmoke?.born) || builtK > 0.8;
       const st = v.data.state, show = v.group.visible && ((st === 'needs_input' || st === 'errored') ? cs.fh < 400 : st === 'idle' && cs.fh < 60);
-      if (show && !veiled && v.icon.textContent && place(v.icon, v.group.position.clone().setY(v.group.position.y + v.iconY))) v.icon.style.display = 'grid';
-      else v.icon.style.display = 'none';
+      const head = v.group.position.clone().setY(v.group.position.y + v.iconY);
+      const iconOn = show && !veiled && !!v.icon.textContent && place(v.icon, head);
+      v.icon.style.display = iconOn ? 'grid' : 'none';
+      // Name tags only up close, and not under the open bubble; they sit above the state icon.
+      const tagOn = v.group.visible && !veiled && cs.fh < TAG_MAX_FH && v.data.sessionId !== selected && place(v.tag, head, iconOn ? -28 : 0);
+      v.tag.style.display = tagOn ? 'flex' : 'none';
     }
     for (const l of labelItems) { if (veiled || cs.fh > l.maxFh || (l.born && builtK < 0.6)) l.el.style.display = 'none'; else if (place(l.el, l.pos)) l.el.style.display = 'block'; }
 
@@ -492,7 +498,8 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
         proj.copy(sel.group.position).setY(sel.group.position.y + sel.iconY - 0.2).project(camera);
         const on = Math.abs(proj.x) < 1.1 && Math.abs(proj.y) < 1.1;
         bubble.style.visibility = on ? 'visible' : 'hidden';
-        if (on) bubble.style.transform = `translate(${((proj.x + 1) / 2) * vw}px, ${((1 - proj.y) / 2) * vh - 14}px) translate(-50%, -100%)`;
+        // A tall bubble (several questions) slides down rather than past the top of the screen.
+        if (on) bubble.style.transform = `translate(${((proj.x + 1) / 2) * vw}px, ${Math.max(((1 - proj.y) / 2) * vh - 14, bubble.offsetHeight + 8)}px) translate(-50%, -100%)`;
       } else bubble.style.visibility = 'hidden';
     }
     pipeline.render();

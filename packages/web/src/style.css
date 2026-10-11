@@ -257,3 +257,39 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .help kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--i-edge); border-radius: 2px; color: var(--i-mid); }
 .help .keys { display: flex; gap: 4px; }
 .help p { margin: 6px 0 0; font-size: 12px; color: var(--i-soft); text-wrap: pretty; }
+
+/* Bot name tags */
+.labels .tag {
+  position: absolute; left: 0; top: 0; display: none; flex-direction: column; align-items: center; max-width: 220px;
+  padding: 2px 7px; border-radius: 3px; background: var(--i-pill); color: var(--i-ink); pointer-events: none;
+  white-space: nowrap; will-change: transform; box-sizing: border-box; font: 11px/1.35 var(--mono);
+}
+.labels .tag b { font-weight: 700; }
+.labels .tag span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--i-soft); font-size: 10px; }
+
+/* Names and titles */
+.agent .where { display: flex; flex-direction: column; min-width: 0; }
+.agent .where b { font: 600 12px var(--mono); }
+.agent .where .sub { overflow: hidden; text-overflow: ellipsis; font: 400 11px 'Hanken Grotesk', system-ui, sans-serif; color: var(--i-soft); }
+.bubble .subtitle { margin-top: 2px; font-size: 13px; color: var(--i-mid); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.settings .note { margin: 0; font: 11px var(--mono); color: var(--i-soft); }
+
+/* AskUserQuestion */
+.questions { display: flex; flex-direction: column; gap: 14px; max-height: min(32vh, 300px); overflow: auto; overscroll-behavior: contain; }
+.q { display: flex; flex-direction: column; gap: 6px; }
+.q .kicker { font: 10px var(--mono); letter-spacing: 0.14em; color: var(--i-amber-t); text-transform: uppercase; }
+.q p { margin: 0; font-weight: 600; }
+.opts { display: flex; flex-direction: column; gap: 4px; }
+.opt {
+  display: flex; flex-direction: column; gap: 1px; padding: 6px 9px; text-align: left;
+  border: 1px solid var(--i-edge); border-radius: 3px; background: transparent;
+}
+.opt b { font: 500 12px var(--mono); }
+.opt span { font-size: 12px; color: var(--i-soft); }
+.opt:hover { background: var(--i-sel); }
+.opt[aria-checked="true"] { border-color: #ffc21a; background: color-mix(in srgb, #ffc21a 14%, transparent); }
+.other {
+  padding: 6px 9px; border: 1px solid var(--i-btn-edge); border-radius: 3px; background: var(--i-code);
+  color: var(--i-ink); font: 12px var(--mono); outline: none;
+}
+.other:focus { border-color: #ffc21a; }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bots, hold, release, sweep, track } from "./bots.js";
+import { bots, describe, hold, promptTitle, release, retitle, sweep, track } from "./bots.js";
 
 const place = { repo: "hamlet", branch: "main" };
 const send = (sessionId: string, hook_event_name: string, extra: Record<string, unknown> = {}) =>
@@ -50,4 +50,41 @@ test("sweep drops silent sessions but keeps ones holding a request", () => {
   assert.equal(bots.has("s4"), false);
   assert.equal(bots.has("s5"), true);
   release(3);
+});
+
+test("the first real prompt titles a session until Claude Code's own title arrives", () => {
+  send("t1", "UserPromptSubmit", { prompt: "<agent-message>a subagent report</agent-message>" });
+  assert.equal(bots.get("t1")!.title, undefined);
+  send("t1", "UserPromptSubmit", { prompt: "Fix   the\nlogin bug" });
+  send("t1", "UserPromptSubmit", { prompt: "now add tests" });
+  assert.equal(bots.get("t1")!.title, "Fix the login bug");
+  assert.equal(retitle("t1", "Login bug fix", "ai"), true);
+  assert.equal(retitle("t1", "Renamed by me", "custom"), true);
+  // An AI title written later must not replace the user's /rename.
+  assert.equal(retitle("t1", "Login bug fix and tests", "ai"), false);
+  assert.equal(bots.get("t1")!.title, "Renamed by me");
+  assert.equal(promptTitle("x".repeat(100))!.length, 60);
+  send("t1", "SessionEnd");
+});
+
+test("activity follows the running tool and clears when the session stops", () => {
+  send("t2", "PreToolUse", { tool_name: "Edit", tool_input: { file_path: "/src/hamlet/bots.ts" }, tool_use_id: "u1" });
+  assert.equal(bots.get("t2")!.activity, "Editing bots.ts");
+  // A parallel tool finishing doesn't clear the newer one.
+  send("t2", "PreToolUse", { tool_name: "Bash", tool_input: { command: "pnpm test", description: "Run tests" }, tool_use_id: "u2" });
+  send("t2", "PostToolUse", { tool_use_id: "u1" });
+  assert.equal(bots.get("t2")!.activity, "Run tests");
+  send("t2", "PostToolUse", { tool_use_id: "u2" });
+  assert.equal(bots.get("t2")!.activity, undefined);
+  send("t2", "PreToolUse", { tool_name: "Grep", tool_input: { pattern: "todo" }, tool_use_id: "u3" });
+  send("t2", "Stop");
+  assert.equal(bots.get("t2")!.activity, undefined);
+  send("t2", "SessionEnd");
+});
+
+test("describe names common tools", () => {
+  assert.equal(describe("Bash", { command: "git status\ngit diff" }), "Running git status");
+  assert.equal(describe("WebFetch", { url: "https://example.com/a" }), "Reading example.com");
+  assert.equal(describe("mcp__github__create_issue"), "Using github");
+  assert.equal(describe("Frobnicate"), "Using Frobnicate");
 });

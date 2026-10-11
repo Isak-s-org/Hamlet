@@ -1,10 +1,12 @@
-import { API_PREFIX, type Bot, type WorldSnapshot } from "@hamlet/shared/world";
+import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
+import { nameAll } from "./names.js";
 import { createWorld, type World } from "./world/engine.js";
 
 const SETTINGS_KEY = "hamlet-settings";
 const DEFAULTS = {
   timeOfDay: 16.5, dayCycle: false, skyPalette: ["#F2955A", "#FFE1B3"], weather: "clear", world: "stone", botStyle: "cavemen", wind: 1,
   softShadows: true, ambientOcclusion: true, rimLight: true, bloom: true, colorGrade: true, edgePan: true, theme: "dark",
+  sound: true, notify: false,
 };
 type Settings = typeof DEFAULTS;
 type Key = keyof Settings;
@@ -21,6 +23,8 @@ const WORLDS = [["stone", "STONE AGE"], ["suburb", "SUBURB"], ["japan", "JAPAN"]
 const TABS = [["world", "WORLD"], ["light", "LIGHT"], ["graphics", "GRAPHICS"], ["general", "GENERAL"]];
 const SWITCHES: [Key, string][] = [["softShadows", "Soft shadows"], ["ambientOcclusion", "Ambient occlusion"], ["rimLight", "Rim light"], ["bloom", "Bloom"], ["colorGrade", "Color grading"]];
 const LABEL = { working: "WORKING", needs_input: "NEEDS INPUT", idle: "IDLE", errored: "ERRORED" } as const;
+const TOOL_LABEL: Record<string, string> = { AskUserQuestion: "QUESTION", ExitPlanMode: "PLAN" };
+const toolLabel = (p: PendingPermission) => TOOL_LABEL[p.toolName] ?? p.toolName;
 
 function loadSettings(): Partial<Settings> {
   try {
@@ -66,6 +70,8 @@ const scrim = $(".scrim");
 
 let world: World | undefined;
 let bots: Bot[] = [];
+let names = new Map<string, string>();
+const nameOf = (b: Bot) => names.get(b.sessionId) ?? b.sessionId.slice(0, 6);
 let selected: string | null = null;
 let offline = false;
 let error = "";
@@ -112,15 +118,62 @@ function next(): void {
   select(w[(i + 1) % w.length]!.sessionId);
 }
 
+const questionsOf = (p?: PendingPermission): Question[] | undefined =>
+  p?.toolName === "AskUserQuestion" ? (((p.toolInput ?? {}) as { questions?: Question[] }).questions ?? []) : undefined;
+
+/** What the user has picked so far, per held request: option labels per question, plus "Other" text. */
+type Picks = { chosen: Set<string>[]; other: string[] };
+const OTHER = "\0other";
+const picks = new Map<number, Picks>();
+
+function picksFor(p: PendingPermission, qs: Question[]): Picks {
+  let s = picks.get(p.id);
+  if (!s) picks.set(p.id, (s = { chosen: qs.map(() => new Set()), other: qs.map(() => "") }));
+  return s;
+}
+
+/** Answers keyed by question text, multi-select labels joined with ", ", or undefined while one is missing. */
+function answersFor(p: PendingPermission, qs: Question[]): Record<string, string> | undefined {
+  const s = picksFor(p, qs);
+  const out: Record<string, string> = {};
+  for (const [i, q] of qs.entries()) {
+    const labels = q.options.map((o) => o.label).filter((l) => s.chosen[i]!.has(l));
+    if (s.chosen[i]!.has(OTHER) && s.other[i]!.trim()) labels.push(s.other[i]!.trim());
+    if (!labels.length) return;
+    out[q.question] = labels.join(", ");
+  }
+  return out;
+}
+
+function pick(arg: string): void {
+  const p = selBot()?.permission;
+  const qs = questionsOf(p);
+  if (!p || !qs) return;
+  const [i, j] = arg.split(":").map(Number) as [number, number];
+  const q = qs[i];
+  if (!q) return;
+  const label = j < 0 ? OTHER : q.options[j]?.label;
+  if (label === undefined) return;
+  const chosen = picksFor(p, qs).chosen[i]!;
+  if (q.multiSelect) chosen.has(label) ? chosen.delete(label) : chosen.add(label);
+  else chosen.clear(), chosen.add(label);
+  renderBubble(true);
+  if (label === OTHER) bubble.querySelector<HTMLInputElement>(`input[data-q="${i}"]`)?.focus();
+}
+
 async function answer(behavior: "allow" | "deny"): Promise<void> {
   const p = selBot()?.permission;
   if (!p) return;
+  const qs = questionsOf(p);
+  const answers = qs && behavior === "allow" ? answersFor(p, qs) : undefined;
+  if (qs && behavior === "allow" && !answers) return;
   error = "";
   try {
+    const decision: Decision = { id: p.id, behavior, ...(answers && { answers }) };
     const res = await fetch(`${API_PREFIX}/decide`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: p.id, behavior }),
+      body: JSON.stringify(decision),
     });
     if (res.status === 404) throw new Error("That request was already answered or cancelled.");
     if (!res.ok) throw new Error(`Daemon answered ${res.status}.`);
@@ -194,15 +247,17 @@ function agentRow(b: Bot, i: number): HTMLLIElement {
   let li = agentEls.get(b.sessionId);
   if (!li) {
     li = make(`<li class="agent"><button class="row" data-act="select" data-arg="${esc(b.sessionId)}">
-      <span class="dot"></span><span class="where"></span><span class="what"></span><span class="age"></span></button></li>`);
+      <span class="dot"></span><span class="where"><b></b><span class="sub"></span></span><span class="what"></span><span class="age"></span></button></li>`);
     agentEls.set(b.sessionId, li);
   }
   // Swapping the state class (re)starts the CSS flash for waiting/errored.
   if (li.dataset.state !== b.state) (li.dataset.state = b.state), (li.className = `agent ${b.state}`);
   li.classList.toggle("current", b.sessionId === selected);
   li.style.setProperty("--i", String(i));
-  li.querySelector(".where")!.textContent = b.branch;
-  li.querySelector(".what")!.textContent = b.permission?.toolName ?? LABEL[b.state];
+  li.querySelector(".where b")!.textContent = nameOf(b);
+  li.querySelector(".where .sub")!.textContent = b.title ?? b.branch;
+  li.querySelector(".row")!.setAttribute("title", `${nameOf(b)} · ${b.branch}${b.title ? `\n${b.title}` : ""}`);
+  li.querySelector(".what")!.textContent = b.permission ? toolLabel(b.permission) : LABEL[b.state];
   li.querySelector(".age")!.textContent = ago(b.since);
   return li;
 }
@@ -255,8 +310,8 @@ function render(): void {
   tray.querySelector("ol")!.innerHTML = waiting
     .map(
       (b) => `<li><button class="row${b.sessionId === selected ? " current" : ""}" data-act="select" data-arg="${esc(b.sessionId)}">
-        <span class="where">${esc(b.repo)} <span class="branch">${esc(b.branch)}</span></span>
-        <span class="tool">${esc(b.permission?.toolName ?? "input")}</span>
+        <span class="where">${esc(nameOf(b))} <span class="branch">${esc(b.repo)} / ${esc(b.branch)}</span></span>
+        <span class="tool">${esc(b.permission ? toolLabel(b.permission) : "input")}</span>
         <span class="age">${ago(b.since)}</span></button></li>`,
     )
     .join("");
@@ -271,7 +326,7 @@ function renderBubble(force = false): void {
   bubble.classList.toggle("open", !!b);
   if (!b) return (bubbleKey = ""), undefined;
   const state = `${LABEL[b.state]} · ${ago(b.since)}`;
-  const key = JSON.stringify([b.sessionId, b.state, b.branch, b.permission?.id, !!b.terminal, error]);
+  const key = JSON.stringify([b.sessionId, b.state, b.branch, b.permission?.id, !!b.terminal, error, b.title, b.activity, nameOf(b)]);
   // Only the age ticks between real changes; rebuilding would reset the preview's scroll.
   if (key === bubbleKey && !force) return void (bubble.querySelector(".state")!.textContent = state);
   bubbleKey = key;
@@ -281,12 +336,15 @@ function renderBubble(force = false): void {
     <header>
       <span class="head">
         <span class="state">${state}</span>
-        <span class="repo">${esc(b.repo)} <span class="branch">${esc(b.branch)}</span></span>
+        <span class="repo">${esc(nameOf(b))} <span class="branch">${esc(b.repo)} / ${esc(b.branch)}</span></span>
+        ${b.title ? `<span class="subtitle">${esc(b.title)}</span>` : ""}
       </span>
       <button class="ghost" data-act="close" aria-label="Close">ESC</button>
     </header>
     <div class="body">${
-      p
+      p && questionsOf(p)
+        ? questionsHtml(p, questionsOf(p)!)
+        : p
         ? `<span class="kv">TOOL  <b>${esc(p.toolName)}</b></span>
            <pre><span class="soft">${p.toolName === "Bash" ? "$ " : ""}</span>${esc(preview(p.toolName, p.toolInput))}</pre>
            <span class="cwd">CWD   ${esc(p.cwd)}</span>
@@ -294,8 +352,30 @@ function renderBubble(force = false): void {
              <button class="primary" data-act="allow">[A] ALLOW</button>
              <button class="outline" data-act="deny">[D] DENY</button>
            </div>`
-        : `<span class="cwd">CWD   ${esc(b.cwd)}</span>${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
+        : `${b.state === "working" ? `<span class="kv">NOW   <b>${esc(b.activity ?? "Thinking…")}</b></span>` : ""}<span class="cwd">CWD   ${esc(b.cwd)}</span>${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
     }${b.terminal ? `<button class="primary terminal" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button>` : ""}${error ? `<p class="error">${esc(error)}</p>` : ""}</div>`;
+}
+
+function questionsHtml(p: PendingPermission, qs: Question[]): string {
+  const s = picksFor(p, qs);
+  const ready = !!answersFor(p, qs);
+  return `<div class="questions">${qs
+    .map((q, i) => {
+      const opt = (j: number, label: string, desc = "") =>
+        `<button class="opt" role="${q.multiSelect ? "checkbox" : "radio"}" aria-checked="${s.chosen[i]!.has(j < 0 ? OTHER : label)}" data-act="pick" data-arg="${i}:${j}">
+          <b>${esc(label)}</b>${desc ? `<span>${esc(desc)}</span>` : ""}</button>`;
+      return `<div class="q" role="group" aria-label="${esc(q.header || q.question)}">
+        <span class="kicker">${esc(q.header)}${q.multiSelect ? " · PICK ANY" : ""}</span>
+        <p>${esc(q.question)}</p>
+        <div class="opts">${q.options.map((o, j) => opt(j, o.label, o.description)).join("")}${opt(-1, "Other", "Type your own answer")}</div>
+        ${s.chosen[i]!.has(OTHER) ? `<input class="other" data-q="${i}" placeholder="Your answer" maxlength="2000" value="${esc(s.other[i]!)}">` : ""}
+      </div>`;
+    })
+    .join("")}</div>
+    <div class="actions">
+      <button class="primary" data-act="allow" ${ready ? "" : "disabled"}>[A] ANSWER</button>
+      <button class="outline" data-act="deny">[D] DECLINE</button>
+    </div>`;
 }
 
 const sw = (k: Key, label: string) => {
@@ -340,7 +420,11 @@ function renderSettings(): void {
       ).join("")}</div></div>` +
       seg("weather", "Weather", ["clear", "mist"]);
   } else if (tab === "graphics") html = SWITCHES.map(([k, l]) => sw(k, l)).join("");
-  else html = seg("theme", "Theme", ["dark", "light"]) + sw("edgePan", "Pan at screen edge");
+  else {
+    html = seg("theme", "Theme", ["dark", "light"]) + sw("edgePan", "Pan at screen edge") + sw("sound", "Sound when a bot needs you") + sw("notify", "Desktop notifications");
+    if (!("Notification" in window)) html += `<p class="note">This browser can't show notifications.</p>`;
+    else if (Notification.permission === "denied") html += `<p class="note">Notifications are blocked for this page in the browser's site settings.</p>`;
+  }
   settingsEl.querySelector(".tabpanel")!.innerHTML = html;
   settingsEl.querySelector<HTMLButtonElement>(".reset")!.disabled = Object.keys(settings).length === 0;
 }
@@ -364,6 +448,7 @@ app.addEventListener("click", (e) => {
     case "next": next(); break;
     case "close": select(null); break;
     case "allow": case "deny": void answer(el.dataset.act); break;
+    case "pick": pick(arg); break;
     case "terminal": void openTerminal(); break;
     case "zoom-in": world?.zoom(-1); break;
     case "zoom-out": world?.zoom(1); break;
@@ -379,11 +464,27 @@ app.addEventListener("click", (e) => {
       renderSettings();
       break;
     case "tab": tab = arg; renderSettings(); break;
-    case "switch": setSetting(arg as Key, !cfg()[arg as Key] as never); break;
+    case "switch":
+      if (arg === "notify" && !cfg().notify) void enableNotifications();
+      else setSetting(arg as Key, !cfg()[arg as Key] as never);
+      break;
     case "seg": { const [k, v] = arg.split(":"); setSetting(k as Key, v as never); break; }
     case "palette": setSetting("skyPalette", PALETTES[Number(arg)]!.c); break;
-    case "world": if (cfg().world !== arg) (select(null, false), setSetting("world", arg)); break;
+    case "world": if (cfg().world !== arg) (select(null, false), setSetting("world", arg), rename()); break;
   }
+});
+
+// Typing in "Other" updates the picks in place; a rebuild would steal focus.
+bubble.addEventListener("input", (e) => {
+  const input = e.target as HTMLInputElement;
+  const p = selBot()?.permission;
+  const qs = questionsOf(p);
+  if (!p || !qs || input.dataset.q === undefined) return;
+  picksFor(p, qs).other[Number(input.dataset.q)] = input.value;
+  bubble.querySelector<HTMLButtonElement>('[data-act="allow"]')!.disabled = !answersFor(p, qs);
+});
+bubble.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.target as HTMLElement).matches("input.other")) void answer("allow");
 });
 
 // Sliders update in place so re-rendering never interrupts a drag.
@@ -413,16 +514,72 @@ window.addEventListener("keydown", (e) => {
 });
 
 function applySnapshot(snapshot: WorldSnapshot): void {
+  const before = new Map(bots.map((b) => [b.sessionId, b.state]));
   bots = snapshot.bots;
+  names = nameAll(bots.map((b) => b.sessionId), cfg().world);
+  for (const id of picks.keys()) if (!bots.some((b) => b.permission?.id === id)) picks.delete(id);
+  if (primed) for (const b of bots) if (b.state === "needs_input" && before.get(b.sessionId) !== "needs_input") announce(b);
+  primed = true;
+  document.title = waitingOldestFirst().length ? `(${waitingOldestFirst().length}) Hamlet` : "Hamlet";
   let grew = false;
   for (const b of bots) {
     const branches = repos.get(b.repo) ?? [];
     if (!branches.includes(b.branch)) (branches.push(b.branch), repos.set(b.repo, branches), (grew = true));
   }
   if (grew) world?.setRepos(repoList());
-  world?.setBots(bots);
+  world?.setBots(villagers());
   if (selected && !selBot()) select(null, false);
   else render();
+}
+
+const villagers = () => bots.map((b) => ({ ...b, name: nameOf(b) }));
+
+/** Each world has its own names. */
+function rename(): void {
+  names = nameAll(bots.map((b) => b.sessionId), cfg().world);
+  world?.setBots(villagers());
+  render();
+}
+
+/** The first snapshot after connecting only shows what was already waiting; it doesn't alert. */
+let primed = false;
+let audio: AudioContext | undefined;
+
+function chime(): void {
+  try {
+    audio ??= new AudioContext();
+    const t = audio.currentTime;
+    for (const [i, f] of [660, 880].entries()) {
+      const osc = audio.createOscillator(), gain = audio.createGain();
+      osc.frequency.value = f;
+      gain.gain.setValueAtTime(0.0001, t + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.12, t + i * 0.12 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.12 + 0.3);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(t + i * 0.12);
+      osc.stop(t + i * 0.12 + 0.32);
+    }
+  } catch {}
+}
+
+/** Sound and a desktop notification when a bot starts waiting, but only while you're looking elsewhere. */
+function announce(b: Bot): void {
+  if (document.visibilityState === "visible" && document.hasFocus()) return;
+  if (cfg().sound) chime();
+  if (!cfg().notify || !("Notification" in window) || Notification.permission !== "granted") return;
+  const what = b.permission ? (questionsOf(b.permission) ? "has a question" : `wants to use ${b.permission.toolName}`) : "is waiting";
+  const n = new Notification(`${nameOf(b)} ${what}`, { body: [b.title, `${b.repo} / ${b.branch}`].filter(Boolean).join("\n"), tag: b.sessionId, icon: "/favicon.svg" });
+  n.onclick = () => {
+    window.focus();
+    select(b.sessionId);
+    n.close();
+  };
+}
+
+async function enableNotifications(): Promise<void> {
+  if (!("Notification" in window)) return renderSettings();
+  const permission = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+  setSetting("notify", permission === "granted");
 }
 
 function progress(k: number, stage: string): void {
@@ -442,6 +599,7 @@ const reposReady = new Promise<void>((r) => (gotRepos = r));
 const events = new EventSource(`${API_PREFIX}/stream`);
 events.onopen = () => {
   offline = false;
+  primed = false;
   render();
 };
 events.onmessage = (e) => {
@@ -471,7 +629,7 @@ try {
   progress(0.6, "Raising terrain");
   await nextFrame();
   world.setRepos(repoList());
-  world.setBots(bots);
+  world.setBots(villagers());
   progress(0.85, "Compiling shaders");
   await world.compile();
   progress(1, "Ready");

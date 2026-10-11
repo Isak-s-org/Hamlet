@@ -19,7 +19,8 @@ export interface WorldOptions {
 
 export interface World {
   setRepos(list: { repo: string; branches: string[] }[]): void;
-  setBots(bots: Bot[]): void;
+  /** `name` is the villager name shown on the bot's tag. */
+  setBots(bots: (Bot & { name?: string })[]): void;
   setOptions(o: Partial<WorldOptions>): void;
   select(id: string | null, fly?: boolean): void;
   flyToCity(repo: string, fh?: number): void;

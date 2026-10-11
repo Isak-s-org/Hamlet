@@ -14,14 +14,20 @@ import {
   loadOrCreateConfig,
   TOKEN_HEADER,
   type Bot,
+  type Decision,
+  type Question,
 } from "@hamlet/shared";
-import { bots, cwdOf, hold, release, sweep, track } from "./bots.js";
+import { bots, cwdOf, hold, release, retitle, sweep, track } from "./bots.js";
+import { forgetTranscript, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
+type Answer = { behavior: Behavior; answers?: Record<string, string> };
 
 interface Pending {
   receivedAt: number;
-  resolve: (behavior: Behavior) => void;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  resolve: (answer: Answer) => void;
 }
 
 const config = loadOrCreateConfig();
@@ -47,20 +53,58 @@ function log(entry: Record<string, unknown>): void {
   appendFileSync(logFile, JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
 }
 
-function permissionResponse(behavior: Behavior) {
+/** Answers go back as updatedInput, which replaces the whole input, so the questions are echoed with them. */
+function permissionResponse({ behavior, answers }: Answer, toolInput?: Record<string, unknown>) {
   return {
     hookSpecificOutput: {
       hookEventName: "PermissionRequest",
-      decision: behavior === "allow" ? { behavior } : { behavior, message: "Denied from Hamlet" },
+      decision:
+        behavior === "deny" ? { behavior, message: "Denied from Hamlet" }
+        : answers ? { behavior, updatedInput: { ...toolInput, answers } }
+        : { behavior },
     },
   };
 }
 
-function decide(id: number, behavior: Behavior): boolean {
+/** Answers must cover exactly the request's questions; anything else is a bad request. */
+function validAnswers(p: Pending, answers: unknown): answers is Record<string, string> {
+  if (p.toolName !== "AskUserQuestion" || !answers || typeof answers !== "object") return false;
+  const asked = ((p.toolInput.questions ?? []) as Question[]).map((q) => q.question);
+  const given = Object.entries(answers);
+  return (
+    given.length === asked.length &&
+    given.every(([q, a]) => asked.includes(q) && typeof a === "string" && a.trim() !== "" && a.length <= 4000)
+  );
+}
+
+function decide(id: number, answer: Answer): boolean {
   const p = pending.get(id);
   if (!p) return false;
-  p.resolve(behavior);
+  p.resolve(answer);
   return true;
+}
+
+/** Last title read per session, and a timer while one is waiting, so a burst of events reads once. */
+const titleReads = new Map<string, { at: number; timer?: NodeJS.Timeout }>();
+const TITLE_EVERY_MS = 3000;
+
+function readTitles(sessionId: string, path: string): void {
+  const r = titleReads.get(sessionId) ?? { at: 0 };
+  titleReads.set(sessionId, r);
+  if (r.timer) return;
+  r.timer = setTimeout(async () => {
+    r.at = Date.now();
+    try {
+      let changed = false;
+      for (const t of await newTitles(path)) changed = retitle(sessionId, t.title, t.source) || changed;
+      if (changed) broadcast();
+    } catch (e) {
+      log({ kind: "transcript-error", sessionId, error: String(e) });
+    } finally {
+      delete r.timer;
+    }
+  }, Math.max(0, r.at + TITLE_EVERY_MS - Date.now()));
+  r.timer.unref();
 }
 
 const run = promisify(execFile);
@@ -122,6 +166,12 @@ app.post(HOOK_PATH, async (request, reply) => {
   // Every event awaits the same cached git lookup, so a SessionEnd can't overtake an earlier event.
   const bot = track(body, request.headers, await gitPlace(cwdOf(body)));
   broadcast();
+  const transcript = typeof body.transcript_path === "string" ? body.transcript_path : "";
+  if (event === "SessionEnd") {
+    clearTimeout(titleReads.get(String(body.session_id))?.timer);
+    titleReads.delete(String(body.session_id));
+    if (transcript) forgetTranscript(transcript);
+  } else if (bot && transcript) readTitles(bot.sessionId, transcript);
   if (logBodies) {
     const headers = Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.startsWith("x-")));
     delete headers[TOKEN_HEADER];
@@ -134,11 +184,12 @@ app.post(HOOK_PATH, async (request, reply) => {
 
   if (event !== "PermissionRequest") return reply.code(200).send();
 
-  if (autoReply) return permissionResponse(autoReply);
+  if (autoReply) return permissionResponse({ behavior: autoReply });
 
   const id = nextId++;
-  const behavior = await new Promise<Behavior | "cancelled">((resolve) => {
-    pending.set(id, { receivedAt: Date.now(), resolve });
+  const toolInput = (body.tool_input ?? {}) as Record<string, unknown>;
+  const answer = await new Promise<Answer | "cancelled">((resolve) => {
+    pending.set(id, { receivedAt: Date.now(), toolName: String(body.tool_name), toolInput, resolve });
     if (bot) {
       hold(bot.sessionId, { id, toolName: String(body.tool_name), toolInput: body.tool_input, cwd: bot.cwd });
       broadcast();
@@ -155,10 +206,11 @@ app.post(HOOK_PATH, async (request, reply) => {
   release(id);
   broadcast();
 
-  log({ kind: "permission-outcome", id, sessionId: body.session_id, outcome: behavior, heldMs });
-  console.log(`  ⚑ [${id}] ${behavior} after ${(heldMs / 1000).toFixed(1)}s`);
-  if (behavior === "cancelled") return reply;
-  return permissionResponse(behavior);
+  const outcome = answer === "cancelled" ? answer : answer.answers ? "answered" : answer.behavior;
+  log({ kind: "permission-outcome", id, sessionId: body.session_id, outcome, heldMs });
+  console.log(`  ⚑ [${id}] ${outcome} after ${(heldMs / 1000).toFixed(1)}s`);
+  if (answer === "cancelled") return reply;
+  return permissionResponse(answer, toolInput);
 });
 
 app.addHook("onRequest", async (request, reply) => {
@@ -177,9 +229,13 @@ app.get(`${API_PREFIX}/stream`, (request, reply) => {
 });
 
 app.post(`${API_PREFIX}/decide`, async (request, reply) => {
-  const { id, behavior } = request.body as { id?: unknown; behavior?: unknown };
+  const { id, behavior, answers } = request.body as Partial<Record<keyof Decision, unknown>>;
   if (typeof id !== "number" || (behavior !== "allow" && behavior !== "deny")) return reply.code(400).send();
-  return reply.code(decide(id, behavior) ? 204 : 404).send();
+  const p = pending.get(id);
+  if (!p) return reply.code(404).send();
+  if (answers !== undefined && (behavior !== "allow" || !validAnswers(p, answers))) return reply.code(400).send();
+  decide(id, answers ? { behavior, answers } : { behavior });
+  return reply.code(204).send();
 });
 
 app.post(`${API_PREFIX}/terminal`, async (request, reply) => {
@@ -198,7 +254,7 @@ app.post(`${API_PREFIX}/terminal`, async (request, reply) => {
 createInterface({ input: process.stdin }).on("line", (line) => {
   const [cmd, idText] = line.trim().split(/\s+/);
   const id = Number(idText);
-  if ((cmd === "a" || cmd === "d") && !decide(id, cmd === "a" ? "allow" : "deny")) {
+  if ((cmd === "a" || cmd === "d") && !decide(id, { behavior: cmd === "a" ? "allow" : "deny" })) {
     console.log(`  no pending request ${id}`);
   }
 });
