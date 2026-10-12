@@ -154,17 +154,21 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
   // Camera state
   const cs = { target: new V(0, GRASS_Y, 0), yaw: BASE_YAW, yawGoal: BASE_YAW, pitch: 0.62, pitchGoal: 0.62, fh: 70, fhGoal: 70, vel: new V(), yawVel: 0, anchor: null };
   let vw = 1, vh = 1, flight = null;
+  // Pixels covered on the right (the chat sheet). The frustum shifts sideways by half of it, so the
+  // camera's focus sits in the middle of what is still visible, at the same scale.
+  let inset = 0, insetGoal = 0;
+  const shift = () => ((inset / 2) * cs.fh) / vh;
   function applyCamera() {
     const a = vw / vh, cp = Math.cos(cs.pitch), sp = Math.sin(cs.pitch), cy = Math.cos(cs.yaw), sy = Math.sin(cs.yaw);
     camera.position.set(cs.target.x + cp * sy * DIST, cs.target.y + sp * DIST, cs.target.z + cp * cy * DIST);
     camera.lookAt(cs.target);
-    camera.left = (-cs.fh * a) / 2; camera.right = (cs.fh * a) / 2; camera.top = cs.fh / 2; camera.bottom = -cs.fh / 2;
+    camera.left = (-cs.fh * a) / 2 + shift(); camera.right = (cs.fh * a) / 2 + shift(); camera.top = cs.fh / 2; camera.bottom = -cs.fh / 2;
     camera.updateProjectionMatrix(); camera.updateMatrixWorld();
   }
   function groundAt(nx, ny, gy = GRASS_Y) {
     const a = vw / vh, cp = Math.cos(cs.pitch), sp = Math.sin(cs.pitch), cy = Math.cos(cs.yaw), sy = Math.sin(cs.yaw);
     const r = new V(cy, 0, -sy), up = new V(-sp * sy, cp, -sp * cy), f = new V(-cp * sy, -sp, -cp * cy);
-    const o = cs.target.clone().addScaledVector(f, -DIST).addScaledVector(r, (nx * cs.fh * a) / 2).addScaledVector(up, (ny * cs.fh) / 2);
+    const o = cs.target.clone().addScaledVector(f, -DIST).addScaledVector(r, (nx * cs.fh * a) / 2 + shift()).addScaledVector(up, (ny * cs.fh) / 2);
     return o.addScaledVector(f, (gy - o.y) / f.y);
   }
   const ndc = (cx, cy) => { const b = canvas.getBoundingClientRect(); return [((cx - b.left) / b.width) * 2 - 1, -((cy - b.top) / b.height) * 2 + 1]; };
@@ -317,7 +321,8 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
     cs.anchor = ndc(e.clientX, e.clientY);
     flight = null;
   };
-  const typing = (e) => /input|textarea|select/i.test(e.target?.tagName || '') || e.target?.isContentEditable;
+  // Keys aimed at the chat sheet (arrows scrolling its log) are the chat's, not the camera's.
+  const typing = (e) => /input|textarea|select/i.test(e.target?.tagName || '') || e.target?.isContentEditable || !!e.target?.closest?.('.chat');
   const onKeyDown = (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey || typing(e)) return;
     const k = e.key.toLowerCase();
@@ -422,6 +427,7 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
     }
     cs.yaw += (cs.yawGoal - cs.yaw) * (1 - Math.exp(-dt * 9));
     cs.pitch += (cs.pitchGoal - cs.pitch) * (1 - Math.exp(-dt * 9));
+    inset = Math.abs(insetGoal - inset) < 0.5 ? insetGoal : inset + (insetGoal - inset) * (1 - Math.exp(-dt * 10));
     applyCamera();
   }
 
@@ -526,6 +532,8 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
     flyToCity(repo, fh = 36) { const c = cities.get(repo); if (c) flyTo(c.center, fh); },
     zoom(dir) { cs.fhGoal = THREE.MathUtils.clamp(cs.fhGoal * (dir > 0 ? 1.4 : 1 / 1.4), 10, fitFh() * 1.3); cs.anchor = null; },
     frameAll() { if (world) flyTo(world.center, fitFh(), 1.0); },
+    /** Keeps the view centred on what the chat sheet leaves visible; eases there. */
+    setInset(px) { insetGoal = Math.max(0, px); },
   };
   frame();
   return api;

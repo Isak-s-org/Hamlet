@@ -26,6 +26,8 @@ export interface World {
   flyToCity(repo: string, fh?: number): void;
   zoom(dir: number): void;
   frameAll(): void;
+  /** Pixels covered on the right, such as by the chat sheet; the view centres on the rest. */
+  setInset(px: number): void;
   compile(): Promise<void>;
   reveal(): void;
 }
