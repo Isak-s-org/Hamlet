@@ -116,11 +116,11 @@ function build(): void {
     <p class="note" hidden></p>
     <form class="composer">
       <ul class="menu" id="chat-menu" role="listbox" aria-label="Commands" hidden></ul>
-      <div class="line">
-        <textarea rows="1" role="combobox" aria-label="Message" aria-controls="chat-menu" aria-autocomplete="list" aria-expanded="false" placeholder="Message this session. / for commands"></textarea>
-        <button class="primary" type="submit">SEND</button>
+      <div class="card">
+        <div class="top"><span class="label">MESSAGE</span><span class="hints">⏎ SEND · ⇧⏎ NEW LINE · / COMMANDS</span></div>
+        <textarea rows="1" role="combobox" aria-label="Message" aria-controls="chat-menu" aria-autocomplete="list" aria-expanded="false" placeholder="Message this session"></textarea>
+        <div class="foot"><p class="status" aria-live="polite"></p><button class="primary" type="submit">[⏎] SEND</button></div>
       </div>
-      <p class="status" aria-live="polite"></p>
     </form>`;
   const el = root.querySelector<HTMLElement>(".log")!;
   for (const type of ["wheel", "pointerdown", "keydown", "touchstart"]) el.addEventListener(type, () => (touched = true), { passive: true });
@@ -429,8 +429,7 @@ function grow(): void {
   const ta = textarea();
   if (!ta) return;
   ta.style.height = "auto";
-  // border-box: scrollHeight leaves out the 1px borders.
-  ta.style.height = `${ta.scrollHeight + 2}px`;
+  ta.style.height = `${ta.scrollHeight}px`;
 }
 
 /** Enables what this bot allows, and keeps the reason it can't be sent to on show. */
@@ -439,6 +438,8 @@ function refreshComposer(): void {
   if (!ta) return;
   const block = sendBlock(current);
   ta.disabled = !!block?.readOnly;
+  root.querySelector(".composer .label")!.textContent = block?.label ?? "MESSAGE";
+  root.querySelector(".composer .card")!.classList.toggle("blocked", !!block);
   root.querySelector<HTMLButtonElement>(".composer button")!.disabled = !!block || inFlight?.id === sessionId || !ta.value.trim();
   if (block) setStatus(block.reason, "sticky");
   else if (root.querySelector<HTMLElement>(".composer .status")?.dataset.kind === "sticky") setStatus("");

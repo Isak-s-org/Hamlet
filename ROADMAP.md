@@ -17,7 +17,8 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
   hooks were installed show up right away, and a bot leaves soon after its process exits.
 - **Notifications.** A sound, and optionally a desktop notification, when a bot starts waiting while
   the tab isn't focused. The tab title shows how many bots are waiting.
-- **Chat view (read-only).** `[C] CHAT` on a bot opens its conversation in a full-screen overlay:
+- **Chat view (read-only).** `[C] CHAT` on a bot opens its conversation in a sheet beside the
+  village (replies rendered as markdown):
   prompts, replies, tool calls with inputs, results and diffs, subagent work, and notices, live
   from the transcript.
 - **Send messages.** A composer under the chat types into the session's cmux surface: Enter sends,

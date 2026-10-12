@@ -102,8 +102,11 @@ test("only a live cmux session without a held prompt can be sent to", () => {
   assert.match(sendBlock({ ...bot, terminal: { kind: "wt", session: "x" } })!.reason, /Windows Terminal/);
   const cmux = { ...bot, terminal: { kind: "cmux", surfaceId: "s", workspaceId: "w" } } as Bot;
   assert.equal(sendBlock(cmux), undefined);
-  assert.deepEqual(sendBlock({ ...cmux, permission: { id: 1, toolName: "Bash", toolInput: {}, cwd: "/" } }), { reason: "Answer the WAITING prompt first.", readOnly: false });
-  assert.deepEqual(sendBlock({ ...cmux, state: "needs_input" }), { reason: "Answer the WAITING prompt first.", readOnly: false });
+  assert.deepEqual(sendBlock({ ...cmux, permission: { id: 1, toolName: "Bash", toolInput: {}, cwd: "/" } }), { reason: "Answer the WAITING prompt first.", readOnly: false, label: "WAITING" });
+  assert.deepEqual(sendBlock({ ...cmux, state: "needs_input" }), { reason: "Answer the WAITING prompt first.", readOnly: false, label: "WAITING" });
+  assert.equal(sendBlock(undefined)?.label, "ENDED");
+  assert.equal(sendBlock(bot)?.label, "READ-ONLY");
+  assert.equal(sendBlock({ ...bot, terminal: { kind: "wt", session: "x" } })?.label, "READ-ONLY");
 });
 
 test("long paths keep their tail", () => {

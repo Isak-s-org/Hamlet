@@ -130,13 +130,13 @@ export function menuHtml(list: MenuCommand[], active: number): string {
     .join("");
 }
 
-/** Why this bot can't be sent to right now. `readOnly`: typing is pointless too, not just sending. */
-export function sendBlock(bot: Bot | undefined): { reason: string; readOnly: boolean } | undefined {
-  if (!bot) return { reason: "This session has ended.", readOnly: true };
-  if (!bot.terminal) return { reason: "Read-only: Hamlet can't find this session's terminal.", readOnly: true };
-  if (bot.terminal.kind !== "cmux") return { reason: "Read-only: sending works for cmux sessions only. This one runs in Windows Terminal.", readOnly: true };
+/** Why this bot can't be sent to right now, and the composer's label for it. `readOnly`: typing is pointless too, not just sending. */
+export function sendBlock(bot: Bot | undefined): { reason: string; readOnly: boolean; label: "READ-ONLY" | "ENDED" | "WAITING" } | undefined {
+  if (!bot) return { reason: "This session has ended.", readOnly: true, label: "ENDED" };
+  if (!bot.terminal) return { reason: "Read-only: Hamlet can't find this session's terminal.", readOnly: true, label: "READ-ONLY" };
+  if (bot.terminal.kind !== "cmux") return { reason: "Read-only: sending works for cmux sessions only. This one runs in Windows Terminal.", readOnly: true, label: "READ-ONLY" };
   // Waiting with no request held still means a dialog may be open in the terminal.
-  if (bot.permission || bot.state === "needs_input") return { reason: "Answer the WAITING prompt first.", readOnly: false };
+  if (bot.permission || bot.state === "needs_input") return { reason: "Answer the WAITING prompt first.", readOnly: false, label: "WAITING" };
 }
 
 /** A path that fits `max` characters: whole trailing folders after "…/", as the end is the part that tells sessions apart. */
