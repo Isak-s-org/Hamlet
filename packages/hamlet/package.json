@@ -1,0 +1,36 @@
+{
+  "name": "hamlet-village",
+  "version": "0.1.0",
+  "description": "A tiny village where your Claude Code sessions live as bots — watch them work and answer their permission requests.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Isak-gerre/hamlet.git",
+    "directory": "packages/hamlet"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "hamlet": "dist/hamlet.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsx build.ts",
+    "prepack": "turbo run build --filter=hamlet-village",
+    "test": "tsx --test src/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "@hamlet/daemon": "workspace:*",
+    "@hamlet/installer": "workspace:*",
+    "@hamlet/web": "workspace:*",
+    "esbuild": "0.28.2"
+  }
+}

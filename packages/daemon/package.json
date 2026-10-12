@@ -4,6 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "exports": "./src/main.ts",
   "scripts": {
     "dev": "tsx src/main.ts",
     "test": "tsx --test src/*.test.ts"

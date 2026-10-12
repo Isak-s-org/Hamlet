@@ -14,11 +14,12 @@
   },
   "scripts": {
     "dev": "turbo run dev",
+    "build": "turbo run build",
     "daemon": "pnpm --filter @hamlet/daemon dev",
     "web": "pnpm --filter @hamlet/web dev",
     "install-hooks": "pnpm --filter @hamlet/installer start install",
     "uninstall-hooks": "pnpm --filter @hamlet/installer start uninstall",
-    "typecheck": "tsc -b && pnpm --filter @hamlet/web typecheck",
+    "typecheck": "tsc -b && pnpm --filter @hamlet/web --filter hamlet-village typecheck",
     "test": "pnpm -r test"
   },
   "devDependencies": {
