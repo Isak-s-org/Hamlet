@@ -79,8 +79,10 @@ type ChatEntry = { uuid: string; at: string; parent?: string } & (
 ### Endpoint: `GET /api/sessions/:id/chat` (SSE)
 
 - Token check as for every `/api` route. An unknown session id returns 404.
-- The daemon stores each bot's `transcript_path` when a hook brings one. The path is kept in a
-  daemon-side map, not on `Bot`, and the client never sends a path. A session with no stored path
+- The daemon stores each bot's transcript path: from `transcript_path` when a hook brings one, or
+  from `findTranscript` (`registry.ts`) when the session was discovered in Claude Code's session
+  registry. A hook's path replaces a discovered one. The path is kept in a daemon-side map, not on
+  `Bot`, and the client never sends a path. A session with no stored path
   gets one event, `{ error: "no-transcript" }`, and the stream stays open until a path arrives.
 - Events, each one `data: <json>`:
   - `{ entries: ChatEntry[] }`: the backlog is sent in batches of 500 entries, then appended
@@ -137,5 +139,5 @@ type ChatEntry = { uuid: string; at: string; parent?: string } & (
 
 ## Out of scope
 
-Sending messages (phase 2), search, markdown rendering, answering permissions inside the chat,
-sessions the daemon has never seen a hook from, and nesting deeper than one subagent level.
+Sending messages (phase 2), search, markdown rendering, answering permissions inside the chat, and
+nesting deeper than one subagent level.
