@@ -1,8 +1,22 @@
-// The chat overlay: a session's conversation, read live from its transcript through the daemon.
-// Entries are only ever appended; tool cards build their bodies when first opened, so a long
-// session stays light.
-import { API_PREFIX, type Bot, type ChatEntry, type ChatEvent } from "@hamlet/shared/world";
-import { esc, inputHtml, isAgent, resultHtml, Seen, textHtml, toolSummary } from "./chat-format.js";
+// The chat overlay: a session's conversation, read live from its transcript through the daemon,
+// and a composer that types into the session's cmux surface. Entries are only ever appended; tool
+// cards build their bodies when first opened, so a long session stays light.
+import { API_PREFIX, SEND_CAP, type Bot, type ChatEntry, type ChatEvent, type Command } from "@hamlet/shared/world";
+import {
+  allCommands,
+  esc,
+  inputHtml,
+  isAgent,
+  matchCommands,
+  menuHtml,
+  menuQuery,
+  resultHtml,
+  Seen,
+  sendBlock,
+  textHtml,
+  toolSummary,
+  type MenuCommand,
+} from "./chat-format.js";
 import { collapse, enter, expand, growFrom, shrinkTo } from "./motion.js";
 
 type Tool = Extract<ChatEntry, { kind: "tool" }>;
@@ -28,6 +42,17 @@ let following = true;
 let live = false;
 /** The chat is shrinking away: its stream is already shut, and it counts as closed. */
 let closing = false;
+/** Unsent text per session, so closing the chat to answer a prompt keeps it. */
+const drafts = new Map<string, string>();
+/** The session's "/" commands, from its transcript. */
+let commands: Command[] = [];
+/** The chat's bot as of the last update; undefined once its session has ended. */
+let current: Bot | undefined;
+let sending = false;
+let menu: MenuCommand[] = [];
+let active = 0;
+let statusTimer: ReturnType<typeof setTimeout> | undefined;
+const TOO_LONG = `Too long to send (max ${SEND_CAP / 1024} KB).`;
 
 export const chatOpen = () => !root.hidden && !closing;
 export const chatSession = () => (chatOpen() ? sessionId : undefined);
@@ -44,17 +69,48 @@ export function openChat(bot: Bot, name: string): void {
       <button class="pill" data-act="chat-close" hidden></button>
       <button class="ghost" data-act="chat-close" aria-label="Close">ESC</button>
     </header>
-    <div class="log" tabindex="0"></div>
+    <div class="pane">
+      <div class="log" tabindex="0"></div>
+      <button class="jump primary" data-act="chat-jump" hidden>↓ NEW MESSAGES</button>
+    </div>
     <p class="note" hidden></p>
-    <button class="jump primary" data-act="chat-jump" hidden>↓ NEW MESSAGES</button>`;
+    <form class="composer">
+      <ul class="menu" id="chat-menu" role="listbox" aria-label="Commands" hidden></ul>
+      <div class="line">
+        <textarea rows="1" role="combobox" aria-label="Message" aria-controls="chat-menu" aria-autocomplete="list" aria-expanded="false" placeholder="Message this session. / for commands"></textarea>
+        <button class="primary" type="submit">SEND</button>
+      </div>
+      <p class="status" aria-live="polite"></p>
+    </form>`;
   log = root.querySelector<HTMLElement>(".log")!;
   log.addEventListener("scroll", () => {
     following = log!.scrollHeight - log!.scrollTop - log!.clientHeight < 40;
     if (following) root.querySelector<HTMLElement>(".jump")!.hidden = true;
   });
+  const ta = textarea()!;
+  ta.value = drafts.get(bot.sessionId) ?? "";
+  ta.addEventListener("input", () => {
+    if (sessionId) drafts.set(sessionId, ta.value);
+    grow();
+    refreshMenu();
+    refreshComposer();
+  });
+  ta.addEventListener("keydown", composerKey);
+  root.querySelector("form")!.addEventListener("submit", (e) => {
+    e.preventDefault();
+    void send();
+  });
+  // mousedown, not click: the textarea keeps focus.
+  root.querySelector(".menu")!.addEventListener("mousedown", (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>("li[data-i]");
+    if (!row) return;
+    e.preventDefault();
+    complete(Number(row.dataset.i));
+  });
   updateChat(bot, name);
   connect(bot.sessionId);
-  log.focus();
+  grow();
+  (ta.disabled ? log : ta).focus();
   void growFrom(root, from);
 }
 
@@ -111,6 +167,8 @@ export function updateChat(bot: Bot | undefined, name: string): void {
   pill.hidden = bot?.state !== "needs_input";
   pill.textContent = bot?.permission ? `WAITING · ${bot.permission.toolName}` : "WAITING";
   pill.title = "Close the chat to answer in the bubble";
+  current = bot;
+  refreshComposer();
 }
 
 export function jumpToEnd(): void {
@@ -126,6 +184,8 @@ function reset(): void {
   cards.clear();
   results.clear();
   orphans.clear();
+  commands = [];
+  closeMenu();
   queue = [];
   live = false;
   // A cleared log starts pinned to the end again.
@@ -143,7 +203,10 @@ function showNote(text: string): void {
 
 function receive(e: ChatEvent): void {
   if ("reset" in e) return reset();
-  if ("commands" in e) return;
+  if ("commands" in e) {
+    commands = e.commands;
+    return refreshMenu();
+  }
   if ("error" in e)
     return showNote(e.error === "no-transcript" ? "Waiting for this session's transcript…" : "Couldn't read this session's transcript. The daemon log has the error.");
   showNote("");
@@ -188,6 +251,8 @@ function element(entry: Exclude<ChatEntry, Result>): HTMLElement {
   if (entry.kind === "prompt") (el.className = "prompt"), (el.innerHTML = `<span class="caret">&gt;</span><p>${esc(entry.text)}</p>`);
   else if (entry.kind === "text") (el.className = "reply"), (el.innerHTML = textHtml(entry.text));
   else if (entry.kind === "thinking") (el.className = "thinking"), (el.innerHTML = `<summary>Thinking</summary><div class="body"><p class="say">${esc(entry.text)}</p></div>`), disclose(el as HTMLDetailsElement);
+  // Multi-line notices are command output (/context, /cost): keep its layout.
+  else if (entry.text.includes("\n")) (el.className = `output ${entry.level}`), (el.innerHTML = `<pre>${esc(entry.text)}</pre>`);
   else (el.className = `notice ${entry.level}`), (el.innerHTML = `<span>${esc(entry.text)}</span>`);
   return el;
 }
@@ -235,4 +300,149 @@ function fillResult(toolUseId: string): void {
   card.el.dataset.state = r.isError ? "error" : "done";
   const slot = card.el.querySelector<HTMLElement>(".result")!;
   if (card.el.open && !slot.innerHTML) slot.innerHTML = resultHtml(r);
+}
+
+const textarea = () => root.querySelector<HTMLTextAreaElement>(".composer textarea");
+
+function composerKey(e: KeyboardEvent): void {
+  const plain = !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !e.isComposing;
+  if (menu.length) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      active = (active + (e.key === "ArrowDown" ? 1 : menu.length - 1)) % menu.length;
+      renderMenu();
+    } else if ((e.key === "Tab" || e.key === "Enter") && plain) complete(active);
+    else if (e.key === "Escape") closeMenu();
+    else return;
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "Enter" && plain) {
+    e.preventDefault();
+    void send();
+  } else if (e.key === "Escape") {
+    // The village's keys skip text fields, so the composer closes the chat itself.
+    e.preventDefault();
+    closeChat();
+  } else if ((e.key === "PageUp" || e.key === "PageDown") && log) {
+    e.preventDefault();
+    log.scrollBy({ top: (e.key === "PageUp" ? -0.9 : 0.9) * log.clientHeight });
+  }
+}
+
+function grow(): void {
+  const ta = textarea();
+  if (!ta) return;
+  ta.style.height = "auto";
+  // border-box: scrollHeight leaves out the 1px borders.
+  ta.style.height = `${ta.scrollHeight + 2}px`;
+}
+
+/** Enables what this bot allows, and keeps the reason it can't be sent to on show. */
+function refreshComposer(): void {
+  const ta = textarea();
+  if (!ta) return;
+  const block = sendBlock(current);
+  ta.disabled = !!block?.readOnly;
+  root.querySelector<HTMLButtonElement>(".composer button")!.disabled = !!block || sending || !ta.value.trim();
+  if (block) setStatus(block.reason, "sticky");
+  else if (root.querySelector<HTMLElement>(".composer .status")?.dataset.kind === "sticky") setStatus("");
+  if (ta.disabled && menu.length) closeMenu();
+}
+
+function setStatus(text: string, kind: "info" | "error" | "sticky" = "info", fade = false): void {
+  const el = root.querySelector<HTMLElement>(".composer .status");
+  if (!el) return;
+  clearTimeout(statusTimer);
+  el.textContent = text;
+  el.dataset.kind = kind;
+  el.classList.toggle("error", kind === "error");
+  el.classList.remove("faded");
+  if (fade) statusTimer = setTimeout(() => el.classList.add("faded"), 4000);
+}
+
+async function send(): Promise<void> {
+  const ta = textarea();
+  const id = sessionId;
+  if (!ta || !id || sending || sendBlock(current) || !ta.value.trim()) return;
+  if (new TextEncoder().encode(ta.value).length > SEND_CAP) return setStatus(TOO_LONG, "error");
+  const queued = current?.state === "working";
+  sending = ta.readOnly = true;
+  refreshComposer();
+  let status: [string, "info" | "error", boolean];
+  try {
+    const res = await fetch(`${API_PREFIX}/sessions/${encodeURIComponent(id)}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: ta.value }),
+    });
+    if (res.ok) {
+      drafts.delete(id);
+      ta.value = "";
+      status = [queued ? "Queued: Claude picks it up after the current step." : "Sent.", "info", true];
+    } else status = [await failure(res), "error", false];
+  } catch {
+    status = ["Couldn't reach the daemon.", "error", false];
+  }
+  sending = ta.readOnly = false;
+  // The chat may have closed, or moved to another session, while the request was out.
+  if (!ta.isConnected) return;
+  grow();
+  setStatus(...status);
+  refreshComposer();
+}
+
+async function failure(res: Response): Promise<string> {
+  switch (res.status) {
+    case 400: return "Nothing to send.";
+    case 404: return "This session has ended.";
+    case 409: return "Answer the WAITING prompt first.";
+    case 413: return TOO_LONG;
+    case 422: return sendBlock(current)?.reason ?? "This session can't receive messages.";
+    case 502: {
+      const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+      return `Couldn't reach cmux: ${error?.split("\n")[0] || "no answer"}`;
+    }
+    default: return `Daemon answered ${res.status}.`;
+  }
+}
+
+function refreshMenu(): void {
+  const ta = textarea();
+  const q = ta && !ta.disabled ? menuQuery(ta.value) : undefined;
+  const was = menu[active]?.name;
+  menu = q === undefined ? [] : matchCommands(q, allCommands(commands));
+  // Keep the highlight on the same command while the list narrows.
+  active = Math.max(0, menu.findIndex((c) => c.name === was));
+  renderMenu();
+}
+
+function closeMenu(): void {
+  menu = [];
+  renderMenu();
+}
+
+function renderMenu(): void {
+  const el = root.querySelector<HTMLElement>(".menu");
+  const ta = textarea();
+  if (!el || !ta) return;
+  el.hidden = !menu.length;
+  el.innerHTML = menuHtml(menu, active);
+  ta.setAttribute("aria-expanded", String(menu.length > 0));
+  if (!menu.length) return ta.removeAttribute("aria-activedescendant");
+  ta.setAttribute("aria-activedescendant", `chat-cmd-${active}`);
+  el.querySelector(`#chat-cmd-${active}`)?.scrollIntoView({ block: "nearest" });
+}
+
+/** Puts the command in the box with a space after it, so arguments can follow before Enter sends. */
+function complete(i: number): void {
+  const ta = textarea();
+  const c = menu[i];
+  if (!ta || !c) return;
+  ta.value = `/${c.name} `;
+  if (sessionId) drafts.set(sessionId, ta.value);
+  closeMenu();
+  grow();
+  refreshComposer();
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
 }

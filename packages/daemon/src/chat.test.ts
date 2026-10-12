@@ -74,6 +74,11 @@ test("system lines become notices, noisy ones are skipped", () => {
   assert.equal((sys({ subtype: "informational", content: "Remote Control is disabled." })[0] as { text: string }).text, "Remote Control is disabled.");
   assert.equal((sys({ subtype: "local_command", content: "<local-command-stdout>Done</local-command-stdout>" })[0] as { text: string }).text, "Done");
   assert.deepEqual(sys({ subtype: "local_command", content: "<local-command-stdout></local-command-stdout>" }), []);
+  const marker = (args: string) => `<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args>${args}</command-args>`;
+  assert.equal((sys({ subtype: "local_command", content: marker("") })[0] as { text: string }).text, "/compact");
+  assert.equal((sys({ subtype: "local_command", content: marker("keep the plan") })[0] as { text: string }).text, "/compact keep the plan");
+  const colored = "<local-command-stdout> \u001b[1mContext Usage\u001b[22m\n\u001b[38;2;136;136;136m⛀ \u001b[39m  Opus</local-command-stdout>";
+  assert.equal((sys({ subtype: "local_command", content: colored })[0] as { text: string }).text, "Context Usage\n⛀   Opus");
   assert.equal((sys({ subtype: "turn_duration", durationMs: 436637 })[0] as { text: string }).text, "Turn took 7m 17s");
   assert.equal((sys({ subtype: "compact_boundary" })[0] as { text: string }).text, "Context compacted");
   assert.deepEqual(sys({ subtype: "stop_hook_summary" }), []);
