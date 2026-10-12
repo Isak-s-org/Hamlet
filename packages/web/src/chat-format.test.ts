@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ChatEntry } from "@hamlet/shared/world";
-import { bytes, diffHtml, esc, inputHtml, resultHtml, Seen, textHtml, toolSummary } from "./chat-format.js";
+import type { Bot, ChatEntry } from "@hamlet/shared/world";
+import { allCommands, bytes, diffHtml, esc, inputHtml, matchCommands, menuHtml, menuQuery, resultHtml, Seen, sendBlock, textHtml, toolSummary } from "./chat-format.js";
 
 const result = (o: Partial<Extract<ChatEntry, { kind: "result" }>>) =>
   ({ uuid: "r", at: "", kind: "result", toolUseId: "t", text: "", isError: false, ...o }) as Extract<ChatEntry, { kind: "result" }>;
@@ -61,4 +61,44 @@ test("Seen drops entries a reconnect sends again", () => {
   assert.deepEqual(seen.fresh([e("a"), e("b"), e("c")]).map((x) => x.uuid), ["c"]);
   seen.clear();
   assert.equal(seen.fresh([e("a")]).length, 1);
+});
+
+const cmd = (name: string, description = "") => ({ name, description });
+
+test("the menu opens for a lone slash word", () => {
+  assert.equal(menuQuery("/"), "");
+  assert.equal(menuQuery("/comp"), "comp");
+  assert.equal(menuQuery("/compact now"), undefined);
+  assert.equal(menuQuery("hello /x"), undefined);
+  assert.equal(menuQuery("/a\n"), undefined);
+});
+
+test("prefix matches come first, including after a plugin prefix", () => {
+  const list = [cmd("simplify"), cmd("superpowers:brainstorming"), cmd("init"), cmd("brain-dump"), cmd("rebrain")];
+  assert.deepEqual(matchCommands("brain", list).map((c) => c.name), ["brain-dump", "superpowers:brainstorming", "rebrain"]);
+  assert.deepEqual(matchCommands("SIM", list).map((c) => c.name), ["simplify"]);
+  assert.equal(matchCommands("", Array.from({ length: 80 }, (_, i) => cmd(`c${i}`))).length, 50);
+});
+
+test("a session's command wins over a built-in of the same name", () => {
+  const all = allCommands([cmd("clear", "custom clear"), cmd("init")]);
+  assert.deepEqual(all.filter((c) => c.name === "clear"), [{ name: "clear", description: "custom clear" }]);
+  assert.ok(all.some((c) => c.name === "compact" && c.builtin));
+});
+
+test("menu rows never turn a command into markup", () => {
+  const html = menuHtml([{ name: "<img src=x>", description: "<script>alert(1)</script>", builtin: true }], 0);
+  assert.ok(!html.includes("<img") && !html.includes("<script"), html);
+  assert.match(html, /aria-selected="true"/);
+  assert.match(html, /built-in/);
+});
+
+test("only a live cmux session without a held prompt can be sent to", () => {
+  const bot = { sessionId: "s", repo: "r", branch: "b", cwd: "/", state: "idle", since: 0 } as Bot;
+  assert.equal(sendBlock(undefined)?.readOnly, true);
+  assert.match(sendBlock(bot)!.reason, /can't find this session's terminal/);
+  assert.match(sendBlock({ ...bot, terminal: { kind: "wt", session: "x" } })!.reason, /Windows Terminal/);
+  const cmux = { ...bot, terminal: { kind: "cmux", surfaceId: "s", workspaceId: "w" } } as Bot;
+  assert.equal(sendBlock(cmux), undefined);
+  assert.deepEqual(sendBlock({ ...cmux, permission: { id: 1, toolName: "Bash", toolInput: {}, cwd: "/" } }), { reason: "Answer the WAITING prompt first.", readOnly: false });
 });

@@ -1,6 +1,6 @@
-// Pure helpers for the chat view: what a tool card says, and the HTML for text, diffs and results.
+// Pure helpers for the chat view: what a tool card says, the HTML for text, diffs and results, and the composer's "/" menu.
 // Transcript content is untrusted, so every string goes through esc() before it becomes HTML.
-import type { ChatEntry } from "@hamlet/shared/world";
+import { BUILTIN_COMMANDS, type Bot, type ChatEntry, type Command } from "@hamlet/shared/world";
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -81,4 +81,45 @@ export class Seen {
   clear(): void {
     this.ids.clear();
   }
+}
+
+export type MenuCommand = Command & { builtin?: true };
+const MENU_MAX = 50;
+
+/** What to filter the "/" menu by, while the whole message is a lone `/word`. */
+export function menuQuery(text: string): string | undefined {
+  return /^\/(\S*)$/.exec(text)?.[1];
+}
+
+/** Name prefix matches first, also counting the part after a plugin's "plugin:" prefix, then other matches; each group A–Z. */
+export function matchCommands(query: string, list: MenuCommand[]): MenuCommand[] {
+  const q = query.toLowerCase();
+  const starts = (c: MenuCommand) => c.name.toLowerCase().startsWith(q) || c.name.toLowerCase().split(":").at(-1)!.startsWith(q);
+  const byName = (a: MenuCommand, b: MenuCommand) => a.name.localeCompare(b.name);
+  const first = list.filter(starts).sort(byName);
+  const rest = list.filter((c) => !starts(c) && c.name.toLowerCase().includes(q)).sort(byName);
+  return [...first, ...rest].slice(0, MENU_MAX);
+}
+
+/** The session's commands plus the built-ins the transcript doesn't list. */
+export function allCommands(session: Command[]): MenuCommand[] {
+  const names = new Set(session.map((c) => c.name));
+  return [...session, ...BUILTIN_COMMANDS.filter((c) => !names.has(c.name)).map((c) => ({ ...c, builtin: true as const }))];
+}
+
+export function menuHtml(list: MenuCommand[], active: number): string {
+  return list
+    .map(
+      (c, i) =>
+        `<li role="option" id="chat-cmd-${i}" data-i="${i}" aria-selected="${i === active}"><span class="cmd">/${esc(c.name)}</span><span class="desc">${esc(c.description)}</span>${c.builtin ? `<span class="tag">built-in</span>` : ""}</li>`,
+    )
+    .join("");
+}
+
+/** Why this bot can't be sent to right now. `readOnly`: typing is pointless too, not just sending. */
+export function sendBlock(bot: Bot | undefined): { reason: string; readOnly: boolean } | undefined {
+  if (!bot) return { reason: "This session has ended.", readOnly: true };
+  if (!bot.terminal) return { reason: "Read-only: Hamlet can't find this session's terminal.", readOnly: true };
+  if (bot.terminal.kind !== "cmux") return { reason: "Read-only: sending works for cmux sessions only. This one runs in Windows Terminal.", readOnly: true };
+  if (bot.permission) return { reason: "Answer the WAITING prompt first.", readOnly: false };
 }
