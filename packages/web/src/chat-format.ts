@@ -18,6 +18,12 @@ export function toolSummary(name: string, input: unknown): string {
   return text.length > 120 ? `${text.slice(0, 119)}…` : text;
 }
 
+let markdown: ((text: string) => string) | undefined;
+/** markdown.ts loads after the app starts; until then prose is plain text. */
+export const setMarkdown = (fn: ((text: string) => string) | undefined) => void (markdown = fn);
+/** Claude's own writing (replies, agent reports, plans) as HTML. */
+export const prose = (text: string): string => `<div class="md">${(markdown ?? textHtml)(text)}</div>`;
+
 /** Claude's text: paragraphs keep their line breaks, fenced code becomes a code block. */
 export function textHtml(text: string): string {
   const out: string[] = [];
@@ -56,6 +62,7 @@ export function inputHtml(name: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>;
   if (name === "Bash") return `<pre class="code">$ ${esc(str(i.command))}</pre>`;
   if (isAgent(name)) return `<pre class="code">${esc(str(i.prompt))}</pre>`;
+  if (name === "ExitPlanMode" && typeof i.plan === "string") return prose(i.plan);
   const diff = diffHtml(name, input);
   if (diff !== undefined) return `<p class="path">${esc(str(i.file_path))}</p>${diff}`;
   return `<pre class="code">${esc(JSON.stringify(input, null, 2))}</pre>`;
@@ -65,8 +72,10 @@ export function bytes(n: number): string {
   return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`;
 }
 
-export function resultHtml(r: Extract<ChatEntry, { kind: "result" }>): string {
+/** `report`: the result of an Agent/Task call, which is the subagent's own write-up. */
+export function resultHtml(r: Extract<ChatEntry, { kind: "result" }>, report = false): string {
   const note = r.truncated ? `<p class="note">Result truncated (${bytes(r.truncated)})</p>` : "";
+  if (report && !r.isError && r.text) return prose(r.text) + note;
   return `<pre class="out${r.isError ? " err" : ""}">${esc(r.text) || "(no output)"}</pre>${note}`;
 }
 

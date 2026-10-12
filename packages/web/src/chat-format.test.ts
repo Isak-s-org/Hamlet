@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Bot, ChatEntry } from "@hamlet/shared/world";
-import { allCommands, bytes, diffHtml, esc, inputHtml, matchCommands, menuHtml, menuQuery, resultHtml, Seen, sendBlock, shortPath, textHtml, toolSummary } from "./chat-format.js";
+import { allCommands, bytes, diffHtml, esc, inputHtml, matchCommands, menuHtml, menuQuery, prose, resultHtml, Seen, sendBlock, setMarkdown, shortPath, textHtml, toolSummary } from "./chat-format.js";
 
 const result = (o: Partial<Extract<ChatEntry, { kind: "result" }>>) =>
   ({ uuid: "r", at: "", kind: "result", toolUseId: "t", text: "", isError: false, ...o }) as Extract<ChatEntry, { kind: "result" }>;
@@ -111,4 +111,17 @@ test("long paths keep their tail", () => {
   assert.equal(shortPath("/Users/isak.gerre/Documents/projects/Hamlet/packages/web", 30), "…/projects/Hamlet/packages/web");
   assert.equal(shortPath("/"), "/");
   assert.ok(shortPath("/a/" + "b".repeat(60), 20).length <= 20);
+});
+
+test("prose is plain until markdown has loaded, then markdown; agent reports and plans use it", () => {
+  assert.equal(prose("**hi**"), `<div class="md">${textHtml("**hi**")}</div>`);
+  setMarkdown((t) => `<md>${t}</md>`);
+  try {
+    assert.equal(prose("**hi**"), `<div class="md"><md>**hi**</md></div>`);
+    assert.match(resultHtml(result({ text: "report" }), true), /<md>report<\/md>/);
+    assert.doesNotMatch(resultHtml(result({ text: "ls output" })), /<md>/);
+    assert.match(inputHtml("ExitPlanMode", { plan: "# Plan" }), /<md># Plan<\/md>/);
+  } finally {
+    setMarkdown(undefined);
+  }
 });
