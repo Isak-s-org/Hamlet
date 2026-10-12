@@ -6,3 +6,4 @@ spike-logs/
 .claude/settings.json
 .claude/settings.local.json
 .turbo/
+.worktrees/
