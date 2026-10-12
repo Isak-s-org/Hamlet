@@ -45,3 +45,17 @@ export interface WorldSnapshot {
 }
 
 export const API_PREFIX = "/api";
+
+/** One item of a session's conversation, read from its transcript. `parent` is the Agent/Task call a subagent's entry belongs to. */
+export type ChatEntry = { uuid: string; at: string; parent?: string } & (
+  | { kind: "prompt"; text: string }
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; id: string; name: string; input: unknown }
+  /** `truncated` is the full result's size in bytes when `text` was cut. */
+  | { kind: "result"; toolUseId: string; text: string; isError: boolean; truncated?: number }
+  | { kind: "notice"; text: string; level: "info" | "error" }
+);
+
+/** One message of GET /api/sessions/:id/chat. */
+export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" };

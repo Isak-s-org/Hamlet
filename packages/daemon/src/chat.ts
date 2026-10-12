@@ -1,0 +1,98 @@
+// Turns Claude Code transcript lines into chat entries for the web app's chat view. Pure, so the
+// rules can be tested on lines copied from real transcripts.
+import type { ChatEntry } from "@hamlet/shared";
+
+/** Longest tool result or input string sent to the browser, so a 20 MB transcript still opens quickly. */
+export const TEXT_CAP = 32 * 1024;
+
+type Line = Record<string, any>;
+
+const capped = (s: string) => (s.length > TEXT_CAP ? `${s.slice(0, TEXT_CAP)}\n… (truncated)` : s);
+
+/** Caps every string in a tool input, at any depth: MultiEdit keeps its strings in `edits`. */
+function capInput(v: unknown): unknown {
+  if (typeof v === "string") return capped(v);
+  if (Array.isArray(v)) return v.map(capInput);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, capInput(x)]));
+  return v;
+}
+
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((c) => (c?.type === "text" ? String(c.text ?? "") : `[${c?.type ?? "content"}]`)).join("\n");
+}
+
+/** Claude Code wraps commands, reminders and notifications in tags; only what the user typed is a prompt. */
+const typed = (t: unknown): t is string => typeof t === "string" && t.trim() !== "" && !t.trimStart().startsWith("<");
+const INTERRUPTED = /^\[Request interrupted by user/;
+
+export function duration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function notice(e: Line): { text: string; level: "info" | "error" } | undefined {
+  switch (e.subtype) {
+    case "api_error":
+      return { text: `API error: ${e.error?.formatted ?? e.error?.message ?? "request failed"}`, level: "error" };
+    case "informational":
+      return typeof e.content === "string" && e.content ? { text: e.content, level: "info" } : undefined;
+    case "local_command": {
+      const text = String(e.content ?? "").replace(/<[^>]+>/g, "").trim();
+      return text ? { text, level: "info" } : undefined;
+    }
+    case "turn_duration":
+      return typeof e.durationMs === "number" ? { text: `Turn took ${duration(e.durationMs)}`, level: "info" } : undefined;
+    // Not seen in local transcripts yet; this is the subtype Claude Code gives its compaction marker.
+    case "compact_boundary":
+      return { text: "Context compacted", level: "info" };
+  }
+}
+
+/** The chat entries in one transcript line. `parent` is set for a subagent's transcript: the call that started it. */
+export function toEntries(line: string, parent?: string): ChatEntry[] {
+  let e: Line;
+  try {
+    e = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  if (!e || typeof e !== "object" || typeof e.uuid !== "string") return [];
+  // Older Claude Code versions wrote subagent turns into the main transcript.
+  if (!parent && e.isSidechain) return [];
+  const base = (i: number) => ({ uuid: `${e.uuid}:${i}`, at: String(e.timestamp ?? ""), ...(parent ? { parent } : {}) });
+  const content = e.message?.content;
+  const out: ChatEntry[] = [];
+  if (e.type === "user" && !e.isMeta && !e.isCompactSummary) {
+    const blocks: Line[] = typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : [];
+    blocks.forEach((c, i) => {
+      if (c?.type === "tool_result") {
+        const text = resultText(c.content);
+        const cut = text.length > TEXT_CAP;
+        out.push({
+          ...base(i),
+          kind: "result",
+          toolUseId: String(c.tool_use_id),
+          text: cut ? text.slice(0, TEXT_CAP) : text,
+          isError: c.is_error === true,
+          ...(cut ? { truncated: Buffer.byteLength(text) } : {}),
+        });
+      } else if (c?.type === "text" && INTERRUPTED.test(String(c.text))) out.push({ ...base(i), kind: "notice", text: "Interrupted", level: "info" });
+      else if (c?.type === "text" && typed(c.text)) out.push({ ...base(i), kind: "prompt", text: c.text });
+    });
+  } else if (e.type === "assistant" && Array.isArray(content)) {
+    content.forEach((c: Line, i: number) => {
+      if (c?.type === "text" && typeof c.text === "string" && c.text.trim()) out.push({ ...base(i), kind: "text", text: c.text });
+      else if (c?.type === "thinking" && typeof c.thinking === "string" && c.thinking.trim()) out.push({ ...base(i), kind: "thinking", text: c.thinking });
+      // A fork's transcript starts with a copy of the call that started it.
+      else if (c?.type === "tool_use" && c.id !== parent) out.push({ ...base(i), kind: "tool", id: String(c.id), name: String(c.name), input: capInput(c.input ?? {}) });
+    });
+  } else if (e.type === "system") {
+    const n = notice(e);
+    if (n) out.push({ ...base(0), kind: "notice", ...n });
+  }
+  return out;
+}
