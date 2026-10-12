@@ -183,11 +183,14 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
   --bar: var(--i-btn-edge);
 }
 .bubble.open { display: block; }
+/* The engine moves .bubble by its transform every frame, so the card itself is the inner .pop, free to animate. */
+.bubble.panel { background: none; border: 0; box-shadow: none; }
+.bubble > .pop { background: var(--i-slab); border: 1px solid var(--i-edge); border-radius: 4px; box-shadow: var(--i-shadow); }
 .bubble.needs_input { --bar: #ffc21a; }
 .bubble.errored { --bar: var(--i-red); }
-.bubble::after { content: ''; position: absolute; left: 50%; bottom: -15px; width: 2px; height: 14px; transform: translateX(-50%); background: var(--bar); }
+.bubble::after { content: ''; position: absolute; left: 50%; bottom: -14px; width: 2px; height: 14px; transform: translateX(-50%); background: var(--bar); }
 .bubble .bar { height: 3px; margin: -1px -1px 0; border-radius: 4px 4px 0 0; background: var(--bar); }
-.bubble > header { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px 8px; border: 0; }
+.bubble .pop > header { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px 8px; border: 0; }
 .bubble .head { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .state { font: 10px var(--mono); letter-spacing: 0.14em; color: var(--i-soft); }
 .bubble.needs_input .state { color: var(--i-amber-t); }
