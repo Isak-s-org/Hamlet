@@ -89,3 +89,35 @@ test("feeds poll while watched and are dropped after the grace period", async ()
   await new Promise((r) => setTimeout(r, 150));
   assert.equal(feeds.size, 0);
 });
+
+test("a throwing listener is reported and doesn't stop the others", async () => {
+  const { path } = session();
+  writeFileSync(path, prompt(1));
+  const errors: unknown[] = [];
+  const feed = new ChatFeed(path, (e) => errors.push(e));
+  feed.subscribe(() => {
+    throw new Error("boom");
+  });
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(kinds(events), [1]);
+  assert.equal(errors.length, 1);
+});
+
+test("a path change moves the viewers to the new feed", async () => {
+  const one = session();
+  const two = session();
+  writeFileSync(one.path, prompt(1));
+  writeFileSync(two.path, prompt(2) + prompt(3));
+  const feeds = new Feeds(() => {}, 10, 1000);
+  const a: ChatEvent[] = [];
+  feeds.subscribe("s1", one.path, (e) => a.push(e));
+  await new Promise((r) => setTimeout(r, 40));
+  const b: ChatEvent[] = [];
+  feeds.subscribe("s1", two.path, (e) => b.push(e));
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(kinds(a), [1, "reset", 2]);
+  assert.deepEqual(kinds(b), [2]);
+  assert.equal(feeds.size, 1);
+});

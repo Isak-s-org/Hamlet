@@ -30,10 +30,25 @@ export class ChatFeed {
 
   /** Sends everything read so far, then each change. Returns the unsubscribe function. */
   subscribe(listener: Listener): () => void {
-    for (let i = 0; i < this.entries.length; i += BATCH) listener({ entries: this.entries.slice(i, i + BATCH) });
-    if (this.failed) listener({ error: "unreadable" });
+    for (let i = 0; i < this.entries.length; i += BATCH) this.deliver(listener, { entries: this.entries.slice(i, i + BATCH) });
+    if (this.failed) this.deliver(listener, { error: "unreadable" });
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Removes and returns the listeners, so they can move to another feed for the same session. */
+  takeListeners(): Listener[] {
+    const taken = [...this.listeners];
+    this.listeners.clear();
+    return taken;
+  }
+
+  /** Moves listeners from a feed that was replaced: each is told to start over, then gets this feed's events. */
+  adopt(listeners: Listener[]): void {
+    for (const listener of listeners) {
+      this.deliver(listener, { reset: true });
+      this.listeners.add(listener);
+    }
   }
 
   /** Reads what the main transcript and each subagent transcript appended since the last poll. */
@@ -82,7 +97,16 @@ export class ChatFeed {
   }
 
   private emit(e: ChatEvent): void {
-    for (const listener of this.listeners) listener(e);
+    for (const listener of this.listeners) this.deliver(listener, e);
+  }
+
+  /** A listener that throws must not stop the others getting the event, or reject the poll. */
+  private deliver(listener: Listener, e: ChatEvent): void {
+    try {
+      listener(e);
+    } catch (err) {
+      this.onError(err);
+    }
   }
 }
 
@@ -102,13 +126,14 @@ export class Feeds {
 
   subscribe(sessionId: string, path: string, listener: Listener): () => void {
     let f = this.feeds.get(sessionId);
-    // A hook's path replaces one found in the session registry.
-    if (f && f.feed.path !== path) this.drop(sessionId), (f = undefined);
-    if (!f) {
-      const feed = new ChatFeed(path, (e) => this.onError(sessionId, e));
-      f = { feed, timer: this.start(sessionId, feed) };
-      this.feeds.set(sessionId, f);
+    // A hook's path replaces one found in the session registry: the viewers move to a feed on that path.
+    if (f && f.feed.path !== path) {
+      const moved = f.feed.takeListeners();
+      this.drop(sessionId);
+      f = this.open(sessionId, path);
+      f.feed.adopt(moved);
     }
+    if (!f) f = this.open(sessionId, path);
     return f.feed.subscribe(listener);
   }
 
@@ -119,6 +144,13 @@ export class Feeds {
     this.feeds.delete(sessionId);
   }
 
+  private open(sessionId: string, path: string) {
+    const feed = new ChatFeed(path, (e) => this.onError(sessionId, e));
+    const f = { feed, timer: this.start(sessionId, feed) };
+    this.feeds.set(sessionId, f);
+    return f;
+  }
+
   private start(sessionId: string, feed: ChatFeed): NodeJS.Timeout {
     let busy = false;
     const tick = async () => {
@@ -126,6 +158,8 @@ export class Feeds {
       busy = true;
       try {
         await feed.poll();
+      } catch (e) {
+        this.onError(sessionId, e);
       } finally {
         busy = false;
       }
