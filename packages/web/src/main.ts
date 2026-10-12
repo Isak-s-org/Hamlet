@@ -1,5 +1,5 @@
 import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
-import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, updateChat } from "./chat.js";
+import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, setChatHooks, updateChat } from "./chat.js";
 import { esc, setMarkdown, shortPath } from "./chat-format.js";
 import { pop } from "./motion.js";
 import { nameAll } from "./names.js";
@@ -110,6 +110,9 @@ function select(id: string | null, fly = true): void {
   selected = id;
   error = "";
   world?.select(id, fly);
+  // The chat sheet follows the selection; deselecting leaves it on the session it shows.
+  const b = id && chatOpen() ? selBot() : undefined;
+  if (b) openChat(b, nameOf(b), false);
   render();
 }
 
@@ -524,11 +527,8 @@ window.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
   if (/input|textarea|select/i.test(t.tagName) || t.isContentEditable) return;
   const k = e.key.toLowerCase();
-  // The chat covers the village, so only its own keys work while it's open.
-  if (chatOpen()) {
-    if (k === "escape" || k === "c") closeChat();
-    return;
-  }
+  // The chat sheet leaves the village usable beside it: only ESC and C are its own.
+  if (chatOpen() && (k === "escape" || k === "c")) return closeChat();
   if (k === "escape") {
     if (!scrim.hidden) scrim.hidden = true;
     else if (!settingsEl.hidden) toggleSettings(false);
@@ -673,5 +673,6 @@ try {
 }
 
 /** markdown-it is the chat's biggest piece: fetched when the page is idle, so it's ready before a chat opens. */
-export const loadMarkdown = () => import("./markdown.js").then((m) => setMarkdown(m.mdHtml));
+const loadMarkdown = () => import("./markdown.js").then((m) => setMarkdown(m.mdHtml));
 (window.requestIdleCallback ?? ((f: () => void) => setTimeout(f, 1000)))(() => void loadMarkdown());
+setChatHooks({ inset: (px) => world?.setInset(px), loadMarkdown: () => void loadMarkdown() });

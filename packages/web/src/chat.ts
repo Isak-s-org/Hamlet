@@ -1,6 +1,7 @@
-// The chat overlay: a session's conversation, read live from its transcript through the daemon,
-// and a composer that types into the session's cmux surface. Entries are only ever appended; tool
-// cards build their bodies when first opened, so a long session stays light.
+// The chat sheet: a session's conversation, read live from its transcript through the daemon, and
+// a composer that types into the session's cmux surface. It sits beside the village, which stays
+// usable. Entries are only ever appended; tool cards build their bodies when first opened, so a
+// long session stays light.
 import { API_PREFIX, SEND_CAP, type Bot, type ChatEntry, type ChatEvent, type Command } from "@hamlet/shared/world";
 import {
   allCommands,
@@ -17,7 +18,7 @@ import {
   toolSummary,
   type MenuCommand,
 } from "./chat-format.js";
-import { collapse, enter, expand, growFrom, shrinkTo } from "./motion.js";
+import { collapse, enter, expand, slideIn, slideOut } from "./motion.js";
 
 type Tool = Extract<ChatEntry, { kind: "tool" }>;
 type Result = Extract<ChatEntry, { kind: "result" }>;
@@ -58,12 +59,35 @@ const TOO_LONG = `Too long to send (max ${SEND_CAP / 1024} KB).`;
 export const chatOpen = () => !root.hidden && !closing;
 export const chatSession = () => (chatOpen() ? sessionId : undefined);
 
-export function openChat(bot: Bot, name: string): void {
-  const from = bubbleRect();
-  disconnect();
+/** The sheet's width, or 0 on a narrow screen, where it covers everything and the village needs no room. */
+const sheetWidth = () => (innerWidth < 720 ? 0 : Math.min(560, innerWidth));
+let hooks: { inset(px: number): void; loadMarkdown(): void } = { inset() {}, loadMarkdown() {} };
+/** main.ts owns the world: the sheet tells it how much of the view it covers. */
+export const setChatHooks = (h: typeof hooks) => void (hooks = h);
+addEventListener("resize", () => !root.hidden && !closing && hooks.inset(sheetWidth()));
+
+/**
+ * Opens the sheet on `bot`, or switches an open sheet to it in place. `focus`: put the caret in the
+ * composer, for an open the user asked for; switching from a map click leaves focus where it is.
+ */
+export function openChat(bot: Bot, name: string, focus = true): void {
+  if (chatOpen() && sessionId === bot.sessionId) return updateChat(bot, name);
+  // Mid-slide-out the sheet still has its DOM: it turns around instead of being rebuilt.
+  const arriving = root.hidden || closing;
+  if (root.hidden) build();
   closing = root.inert = false;
-  sessionId = bot.sessionId;
   root.hidden = false;
+  root.parentElement!.classList.add("sheet");
+  hooks.loadMarkdown();
+  show(bot, name);
+  hooks.inset(sheetWidth());
+  const ta = textarea()!;
+  if (focus || arriving) (ta.disabled ? log! : ta).focus();
+  if (arriving) void slideIn(root);
+}
+
+/** The sheet's DOM and its listeners, built once per opening. */
+function build(): void {
   root.innerHTML = `<header>
       <span class="dot"></span>
       <span class="head"><span class="repo"></span><span class="subtitle"></span></span>
@@ -83,14 +107,12 @@ export function openChat(bot: Bot, name: string): void {
       </div>
       <p class="status" aria-live="polite"></p>
     </form>`;
-  log = root.querySelector<HTMLElement>(".log")!;
-  log.addEventListener("scroll", () => {
-    following = log!.scrollHeight - log!.scrollTop - log!.clientHeight < 40;
+  const el = root.querySelector<HTMLElement>(".log")!;
+  el.addEventListener("scroll", () => {
+    following = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     if (following) root.querySelector<HTMLElement>(".jump")!.hidden = true;
   });
   const ta = textarea()!;
-  ta.value = drafts.get(bot.sessionId) ?? "";
-  ta.readOnly = inFlight?.id === bot.sessionId;
   ta.addEventListener("input", () => {
     if (sessionId) drafts.set(sessionId, ta.value);
     grow();
@@ -109,19 +131,22 @@ export function openChat(bot: Bot, name: string): void {
     e.preventDefault();
     complete(Number(row.dataset.i));
   });
+}
+
+/** Points the built sheet at `bot`: a fresh log, its draft, its header and its stream. */
+function show(bot: Bot, name: string): void {
+  disconnect();
+  sessionId = bot.sessionId;
+  log = root.querySelector<HTMLElement>(".log")!;
+  log.innerHTML = "";
+  showNote("");
+  setStatus("");
+  const ta = textarea()!;
+  ta.value = drafts.get(bot.sessionId) ?? "";
+  ta.readOnly = inFlight?.id === bot.sessionId;
   updateChat(bot, name);
   connect(bot.sessionId);
   grow();
-  (ta.disabled ? log : ta).focus();
-  void growFrom(root, from);
-}
-
-/** The selected bot's bubble, where the chat grows from and shrinks back to, if it's on screen. */
-function bubbleRect(): DOMRect | undefined {
-  const bubble = document.querySelector<HTMLElement>(".bubble.open");
-  if (!bubble || getComputedStyle(bubble).visibility === "hidden") return;
-  const r = bubble.getBoundingClientRect();
-  return r.width && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth ? r : undefined;
 }
 
 function connect(id: string): void {
@@ -138,10 +163,12 @@ function connect(id: string): void {
 export function closeChat(): void {
   if (!chatOpen()) return;
   disconnect();
-  // Shut at once, but stays on screen (and lets clicks through) until it has shrunk away.
+  // Shut at once, but stays on screen (and lets clicks through) until it has slid away.
   closing = root.inert = true;
-  void shrinkTo(root, bubbleRect()).then((done) => {
-    if (!done) return; // reopened mid-close: openChat has the overlay now
+  root.parentElement!.classList.remove("sheet");
+  hooks.inset(0);
+  void slideOut(root).then((done) => {
+    if (!done) return; // reopened mid-close: openChat has the sheet now
     closing = root.inert = false;
     root.hidden = true;
     root.innerHTML = "";

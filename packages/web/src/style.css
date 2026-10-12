@@ -297,7 +297,15 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .other:focus { border-color: #ffc21a; }
 
 /* Chat overlay */
-.chat { position: absolute; inset: 0; z-index: 7; display: flex; flex-direction: column; background: var(--i-slab); color: var(--i-ink); }
+.chat {
+  --sheet: min(560px, 100%);
+  position: absolute; top: 0; right: 0; bottom: 0; width: var(--sheet); z-index: 7; display: flex; flex-direction: column;
+  background: var(--i-slab); color: var(--i-ink); border-left: 1px solid var(--i-edge); box-shadow: var(--i-shadow);
+}
+@media (max-width: 719px) { .chat { width: 100%; border-left: 0; } }
+/* The cog and its panel step left of the open sheet; on a narrow screen the sheet covers them. */
+#app.sheet .cog { right: calc(min(560px, 100%) + 16px); }
+#app.sheet .settings { right: calc(min(560px, 100%) + 16px); }
 .chat[hidden] { display: none; }
 .chat > header { --tone: var(--i-soft); display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--i-line); }
 .chat > header.working { --tone: var(--i-mid); }
@@ -308,7 +316,7 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .chat .repo .branch { font-size: 12px; color: var(--i-soft); }
 .chat .subtitle { font-size: 13px; color: var(--i-mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat .pill { border: 1px solid currentColor; background: none; border-radius: 3px; padding: 4px 8px; font: 700 11px var(--mono) !important; letter-spacing: .08em; color: var(--i-amber-t) !important; }
-.chat .log { flex: 1; overflow: auto; padding: 16px max(20px, calc(50% - 440px)) 56px; display: flex; flex-direction: column; gap: 10px; outline: none; }
+.chat .log { flex: 1; overflow: auto; padding: 16px 20px 56px; display: flex; flex-direction: column; gap: 10px; outline: none; }
 .chat > .note { margin: 0; padding: 8px 20px; font: 12px var(--mono); color: var(--i-soft); border-top: 1px solid var(--i-line); }
 .chat .jump { position: absolute; bottom: 20px; left: 50%; translate: -50% 0; padding: 6px 12px; font: 700 11px var(--mono) !important; letter-spacing: .08em; }
 .chat .prompt { display: flex; gap: 8px; padding: 8px 10px; background: var(--i-sel); border-radius: 3px; }
@@ -362,7 +370,7 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .chat .md hr { width: 100%; border: 0; border-top: 1px solid var(--i-line); }
 .chat .md a { color: var(--i-amber-t); }
 .chat .pane { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
-.chat .composer { position: relative; padding: 10px max(20px, calc(50% - 440px)) 8px; border-top: 1px solid var(--i-line); }
+.chat .composer { position: relative; padding: 10px 20px 8px; border-top: 1px solid var(--i-line); }
 .chat .composer .line { display: flex; gap: 8px; align-items: flex-end; }
 .chat .composer textarea { flex: 1; box-sizing: border-box; resize: none; min-height: 36px; max-height: 12.5em; padding: 8px 10px; font: 13px/1.5 var(--mono); background: var(--i-code); color: var(--i-ink); border: 1px solid var(--i-line); border-radius: 3px; outline: none; }
 .chat .composer textarea:focus { border-color: var(--i-mid); }
@@ -371,7 +379,7 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .chat .composer .status { margin: 4px 0 0; min-height: 16px; font: 11px var(--mono); color: var(--i-soft); transition: opacity .4s; }
 .chat .composer .status.error { color: var(--i-red-t); }
 .chat .composer .status.faded { opacity: 0; }
-.chat .menu { position: absolute; left: max(20px, calc(50% - 440px)); right: max(20px, calc(50% - 440px)); bottom: 100%; margin: 0 0 4px; padding: 4px; list-style: none; max-height: 40vh; overflow: auto; background: var(--i-slab); border: 1px solid var(--i-line); border-radius: 3px; box-shadow: 0 8px 24px rgb(0 0 0 / .25); }
+.chat .menu { position: absolute; left: 20px; right: 20px; bottom: 100%; margin: 0 0 4px; padding: 4px; list-style: none; max-height: 40vh; overflow: auto; background: var(--i-slab); border: 1px solid var(--i-line); border-radius: 3px; box-shadow: 0 8px 24px rgb(0 0 0 / .25); }
 .chat .menu[hidden] { display: none; }
 .chat .menu li { display: flex; gap: 10px; align-items: baseline; padding: 5px 8px; border-radius: 3px; cursor: pointer; font: 12px var(--mono); }
 .chat .menu li[aria-selected="true"] { background: var(--i-sel); }
