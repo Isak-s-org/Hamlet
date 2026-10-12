@@ -135,6 +135,11 @@ test("a rebound DNS name is refused on every route", async () => {
   assert.equal((await raw("/hooks", { ...auth, host }, "POST")).status, 403);
 });
 
+test("an encoded path to the API still needs the token", async () => {
+  assert.equal((await raw("/%61pi/stream")).status, 401);
+  assert.equal((await raw("/%61pi/decide", {}, "POST")).status, 401);
+});
+
 test("other sites may link to the village but not frame it or post to it", async () => {
   const from = (dest: string) => ({ "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": dest });
   assert.equal((await raw("/", from("document"))).status, 401);
