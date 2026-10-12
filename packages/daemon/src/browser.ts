@@ -34,6 +34,8 @@ export function serveBrowsers(app: FastifyInstance, token: string, webDir: strin
   const session = createHmac("sha256", token).update("hamlet browser session").digest("base64url");
   // Every pair is checked, so a same-named cookie set by another local port can't shadow ours.
   const signedIn = (cookie: string | undefined) => (cookie ?? "").split(/;\s*/).includes(`${COOKIE}=${session}`);
+  // The matched route, not the raw URL: the router decodes, so /%61pi/stream would reach /api/stream.
+  const isApi = (r: FastifyRequest) => r.routeOptions.url?.startsWith(API_PREFIX) ?? false;
 
   const rules: Rule[] = [
     // DNS rebinding arrives with the attacker's name as Host. The port is free so the vite proxy's localhost:5173 passes.
@@ -43,11 +45,11 @@ export function serveBrowsers(app: FastifyInstance, token: string, webDir: strin
       const site = r.headers["sec-fetch-site"];
       if (site === undefined || site === "same-origin" || site === "none") return false;
       const navigation = r.method === "GET" && r.headers["sec-fetch-mode"] === "navigate" && r.headers["sec-fetch-dest"] === "document";
-      return !navigation || r.url.startsWith(API_PREFIX);
+      return !navigation || isApi(r);
     }],
     // The cookie fails closed without Fetch Metadata, so only a browser on our own origin can use it.
     [401, (r) =>
-      r.url.startsWith(API_PREFIX) &&
+      isApi(r) &&
       r.headers[TOKEN_HEADER] !== token &&
       !(r.headers["sec-fetch-site"] === "same-origin" && signedIn(r.headers.cookie))],
   ];
