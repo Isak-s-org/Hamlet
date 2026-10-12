@@ -1,33 +1,160 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { request, type IncomingHttpHeaders } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { after, before, test } from "node:test";
 import type { ChatEvent } from "@hamlet/shared";
 
-const home = mkdtempSync(join(tmpdir(), "hamlet-server-"));
-const port = 47_000 + Math.floor(Math.random() * 1000);
+const token = randomBytes(16).toString("hex");
+const auth = { "x-hamlet-token": token };
+
+/** Starts a daemon with its own home on a random port. */
+function boot(webDir: string | undefined) {
+  const home = mkdtempSync(join(tmpdir(), "hamlet-server-"));
+  const port = 47_000 + Math.floor(Math.random() * 1000);
+  writeFileSync(join(home, "config.json"), JSON.stringify({ port, token }));
+  // A fake cmux on PATH records its arguments; a cmux-fail file makes it fail like a closed surface.
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "cmux"), `#!/bin/sh\n[ -f "${home}/cmux-fail" ] && { echo "surface not found" >&2; exit 1; }\n[ "$1" = new-surface ] && echo "OK S1 P1 W1"\nprintf '%s\\n' "$@" >> "${home}/cmux.log"\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "open"), "#!/bin/sh\n", { mode: 0o755 });
+  // An empty CLAUDE_CONFIG_DIR keeps the session registry scan away from the real ~/.claude.
+  const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+    env: { ...process.env, HAMLET_HOME: home, CLAUDE_CONFIG_DIR: join(home, "claude"), HAMLET_WEB_DIR: webDir, PATH: `${bin}:${process.env.PATH}` },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  let out = "";
+  child.stdout!.on("data", (d: Buffer) => (out += d.toString()));
+  /** Resolves with the first match once the daemon has printed it. */
+  const printed = (re: RegExp) =>
+    new Promise<RegExpMatchArray>((resolve) => {
+      const check = () => {
+        const m = out.match(re);
+        if (m) child.stdout!.off("data", check), resolve(m);
+      };
+      child.stdout!.on("data", check);
+      check();
+    });
+  return { home, port, child, printed, out: () => out };
+}
+
+const webDir = mkdtempSync(join(tmpdir(), "hamlet-web-"));
+mkdirSync(join(webDir, "assets"));
+writeFileSync(join(webDir, "index.html"), "<title>T</title>");
+writeFileSync(join(webDir, "assets", "app.js"), "export {};");
+const daemon = boot(webDir);
+const { home, port } = daemon;
 const base = `http://127.0.0.1:${port}`;
-const auth = { "x-hamlet-token": "t" };
-writeFileSync(join(home, "config.json"), JSON.stringify({ port, token: "t" }));
-// A fake cmux on PATH records its arguments; a cmux-fail file makes it fail like a closed surface.
-const bin = join(home, "bin");
 const cmuxLog = join(home, "cmux.log");
 const cmuxFail = join(home, "cmux-fail");
-mkdirSync(bin);
-writeFileSync(join(bin, "cmux"), `#!/bin/sh\n[ -f "${cmuxFail}" ] && { echo "surface not found" >&2; exit 1; }\n[ "$1" = new-surface ] && echo "OK S1 P1 W1"\nprintf '%s\\n' "$@" >> "${cmuxLog}"\n`, { mode: 0o755 });
-writeFileSync(join(bin, "open"), "#!/bin/sh\n", { mode: 0o755 });
-// An empty CLAUDE_CONFIG_DIR keeps the session registry scan away from the real ~/.claude.
-const daemon = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
-  env: { ...process.env, HAMLET_HOME: home, CLAUDE_CONFIG_DIR: join(home, "claude"), PATH: `${bin}:${process.env.PATH}` },
-  stdio: ["pipe", "pipe", "inherit"],
+
+before(() => daemon.printed(/one-time link/), { timeout: 20_000 });
+after(() => daemon.child.kill());
+
+/** Sends exactly these headers, Host and Fetch Metadata included, which fetch won't. Event streams resolve at their headers. */
+function raw(path: string, headers: Record<string, string> = {}, method = "GET", to = port) {
+  return new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port: to, path, method, headers: { host: `127.0.0.1:${to}`, ...headers } }, (res) => {
+      let body = "";
+      const done = () => resolve({ status: res.statusCode!, headers: res.headers, body });
+      if (res.headers["content-type"] === "text/event-stream") return void (res.destroy(), done());
+      res.on("data", (d: Buffer) => (body += d.toString())).on("end", done);
+    });
+    req.on("error", reject).end();
+  });
+}
+
+const signInLink = (prefix: string) => daemon.printed(new RegExp(`${prefix}: http://127\\.0\\.0\\.1:${port}(/auth\\?code=[\\w-]+)`)).then((m) => m[1]!);
+let cookie = "";
+
+test("signing in trades the printed one-time link for a session cookie", async () => {
+  const hint = await raw("/");
+  assert.equal(hint.status, 401);
+  assert.match(hint.body, /one-time link/);
+
+  const wrong = await raw("/auth?code=wrong");
+  assert.equal(wrong.status, 303);
+  assert.equal(wrong.headers["set-cookie"], undefined);
+
+  const first = await signInLink("Open Hamlet \\(one-time link\\)");
+  const signedIn = await raw(first);
+  assert.equal(signedIn.status, 303);
+  assert.equal(signedIn.headers.location, "/");
+  const setCookie = signedIn.headers["set-cookie"]![0]!;
+  assert.match(setCookie, /^hamlet_session=[\w-]+; Path=\/; Max-Age=34560000; HttpOnly; SameSite=Lax$/);
+  cookie = setCookie.split(";")[0]!;
+  assert.notEqual(cookie, `hamlet_session=${token}`);
+  assert.equal((await raw(first)).headers["set-cookie"], undefined);
+
+  const second = await signInLink("Next one-time link");
+  assert.notEqual(second, first);
+  assert.equal((await raw(second)).headers["set-cookie"]![0], setCookie);
+
+  const page = await raw("/", { cookie });
+  assert.equal(page.status, 200);
+  assert.equal(page.headers["content-type"], "text/html; charset=utf-8");
+  assert.equal(page.headers["cache-control"], "no-store");
+  assert.equal(page.body, "<title>T</title>");
+  assert.ok(!daemon.out().includes(token));
 });
 
-before(async () => {
-  await new Promise<void>((resolve) => daemon.stdout!.on("data", (d: Buffer) => d.toString().includes("daemon on") && resolve()));
-}, { timeout: 20_000 });
-after(() => daemon.kill());
+test("static files come only from the build", async () => {
+  const js = await raw("/assets/app.js");
+  assert.equal(js.status, 200);
+  assert.equal(js.headers["content-type"], "text/javascript; charset=utf-8");
+  assert.equal(js.headers["x-content-type-options"], "nosniff");
+  assert.equal(js.body, "export {};");
+  for (const path of ["/index.html", "/assets/../../config.json", "/%2e%2e/config.json", "/assets/..%2f..%2fconfig.json", "/nope"]) {
+    assert.equal((await raw(path)).status, 404, path);
+  }
+});
+
+test("the served page reaches the API with its cookie from its own origin only", async () => {
+  const stream = (headers: Record<string, string>) => raw("/api/stream", headers).then((r) => r.status);
+  assert.equal((await raw("/api/stream", { cookie, "sec-fetch-site": "same-origin" })).headers["content-type"], "text/event-stream");
+  assert.equal(await stream({ cookie, "sec-fetch-site": "same-origin" }), 200);
+  assert.equal(await stream({ cookie, "sec-fetch-site": "same-site" }), 403);
+  assert.equal(await stream({ cookie, "sec-fetch-site": "cross-site" }), 403);
+  assert.equal(await stream({ cookie }), 401);
+  assert.equal(await stream({ cookie: `hamlet_session=${token}`, "sec-fetch-site": "same-origin" }), 401);
+  assert.equal(await stream({ cookie: `hamlet_session=junk; ${cookie}`, "sec-fetch-site": "same-origin" }), 200);
+});
+
+test("the dev proxy gets through, a cross-site request through it doesn't", async () => {
+  assert.equal((await raw("/api/stream", { ...auth, host: "localhost:5173", "sec-fetch-site": "same-origin" })).status, 200);
+  assert.equal((await raw("/api/repos/x/new", { ...auth, "sec-fetch-site": "cross-site" }, "POST")).status, 403);
+});
+
+test("a rebound DNS name is refused on every route", async () => {
+  const host = `evil.test:${port}`;
+  assert.equal((await raw("/", { host, cookie })).status, 403);
+  assert.equal((await raw("/api/stream", { ...auth, host })).status, 403);
+  assert.equal((await raw("/hooks", { ...auth, host }, "POST")).status, 403);
+});
+
+test("other sites may link to the village but not frame it or post to it", async () => {
+  const from = (dest: string) => ({ "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": dest });
+  assert.equal((await raw("/", from("document"))).status, 401);
+  assert.equal((await raw("/", from("iframe"))).status, 403);
+  assert.equal((await raw("/", from("document"), "POST")).status, 403);
+});
+
+test("without a web dir the daemon serves only the API, behind the token", { timeout: 20_000 }, async () => {
+  const dev = boot(undefined);
+  try {
+    await dev.printed(/daemon on/);
+    assert.equal((await raw("/api/stream", auth, "GET", dev.port)).status, 200);
+    assert.equal((await raw("/api/stream", {}, "GET", dev.port)).status, 401);
+    assert.equal((await raw("/", {}, "GET", dev.port)).status, 404);
+    assert.equal((await raw("/auth?code=x", {}, "GET", dev.port)).status, 404);
+  } finally {
+    dev.child.kill();
+  }
+  assert.doesNotMatch(dev.out(), /one-time link/);
+});
 
 const hook = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
   fetch(`${base}/hooks`, { method: "POST", headers: { ...auth, "content-type": "application/json", ...headers }, body: JSON.stringify({ cwd: home, ...body }) });

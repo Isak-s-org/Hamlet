@@ -18,6 +18,7 @@ import {
   type Decision,
   type Question,
 } from "@hamlet/shared";
+import { serveBrowsers } from "./browser.js";
 import { bots, cwdOf, discover, hold, interrupt, prune, release, retitle, sweep, track } from "./bots.js";
 import { findTranscript, liveSessions, terminalHeaders } from "./registry.js";
 import { Feeds } from "./feed.js";
@@ -190,6 +191,7 @@ async function scanLoop(): Promise<void> {
 void scanLoop();
 
 const app = Fastify({ bodyLimit: 20 * 1024 * 1024, requestTimeout: 0 });
+const signIn = serveBrowsers(app, config.token, process.env.HAMLET_WEB_DIR);
 
 app.post(HOOK_PATH, async (request, reply) => {
   if (request.headers[TOKEN_HEADER] !== config.token) {
@@ -259,12 +261,6 @@ app.post(HOOK_PATH, async (request, reply) => {
   // The terminal's answer already applied; an empty reply just closes the hook.
   if (answer === "settled") return reply.code(200).send();
   return permissionResponse(answer, toolInput);
-});
-
-app.addHook("onRequest", async (request, reply) => {
-  if (request.url.startsWith(API_PREFIX) && request.headers[TOKEN_HEADER] !== config.token) {
-    return reply.code(401).send();
-  }
 });
 
 app.get(`${API_PREFIX}/stream`, (request, reply) => {
@@ -382,7 +378,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
 });
 
-await app.listen({ host: "127.0.0.1", port: config.port });
+try {
+  await app.listen({ host: "127.0.0.1", port: config.port });
+} catch (e) {
+  if ((e as NodeJS.ErrnoException).code !== "EADDRINUSE") throw e;
+  console.error(`Port ${config.port} is in use. Is Hamlet already running?`);
+  process.exit(1);
+}
 console.log(`hamlet spike daemon on http://127.0.0.1:${config.port}${HOOK_PATH}`);
 console.log(`logging to ${logFile}`);
 console.log(autoReply ? `auto-replying "${autoReply}" to PermissionRequest` : "holding PermissionRequests for manual answers");
+if (signIn) console.log(`Open Hamlet (one-time link): http://127.0.0.1:${config.port}${signIn}`);
