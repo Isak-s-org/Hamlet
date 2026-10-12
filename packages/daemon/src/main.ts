@@ -22,12 +22,14 @@ import { forgetTranscript, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
 type Answer = { behavior: Behavior; answers?: Record<string, string> };
+/** How a held request ended without an answer from Hamlet: the hook connection closed, or a later event showed the terminal answered it. */
+type Elsewhere = "cancelled" | "settled";
 
 interface Pending {
   receivedAt: number;
   toolName: string;
   toolInput: Record<string, unknown>;
-  resolve: (answer: Answer) => void;
+  resolve: (answer: Answer | Elsewhere) => void;
 }
 
 const config = loadOrCreateConfig();
@@ -164,7 +166,8 @@ app.post(HOOK_PATH, async (request, reply) => {
   const body = request.body as Record<string, any>;
   const event = String(body.hook_event_name);
   // Every event awaits the same cached git lookup, so a SessionEnd can't overtake an earlier event.
-  const bot = track(body, request.headers, await gitPlace(cwdOf(body)));
+  const { bot, settled } = track(body, request.headers, await gitPlace(cwdOf(body)));
+  for (const id of settled) pending.get(id)?.resolve("settled");
   broadcast();
   const transcript = typeof body.transcript_path === "string" ? body.transcript_path : "";
   if (event === "SessionEnd") {
@@ -188,10 +191,10 @@ app.post(HOOK_PATH, async (request, reply) => {
 
   const id = nextId++;
   const toolInput = (body.tool_input ?? {}) as Record<string, unknown>;
-  const answer = await new Promise<Answer | "cancelled">((resolve) => {
+  const answer = await new Promise<Answer | Elsewhere>((resolve) => {
     pending.set(id, { receivedAt: Date.now(), toolName: String(body.tool_name), toolInput, resolve });
     if (bot) {
-      hold(bot.sessionId, { id, toolName: String(body.tool_name), toolInput: body.tool_input, cwd: bot.cwd });
+      hold(bot.sessionId, { id, toolName: String(body.tool_name), toolInput: body.tool_input, cwd: bot.cwd }, body.agent_id);
       broadcast();
     }
     // Claude dropping the connection means the request was settled elsewhere (terminal prompt, timeout, interrupt).
@@ -206,10 +209,12 @@ app.post(HOOK_PATH, async (request, reply) => {
   release(id);
   broadcast();
 
-  const outcome = answer === "cancelled" ? answer : answer.answers ? "answered" : answer.behavior;
+  const outcome = typeof answer === "string" ? answer : answer.answers ? "answered" : answer.behavior;
   log({ kind: "permission-outcome", id, sessionId: body.session_id, outcome, heldMs });
   console.log(`  ⚑ [${id}] ${outcome} after ${(heldMs / 1000).toFixed(1)}s`);
   if (answer === "cancelled") return reply;
+  // The terminal's answer already applied; an empty reply just closes the hook.
+  if (answer === "settled") return reply.code(200).send();
   return permissionResponse(answer, toolInput);
 });
 
