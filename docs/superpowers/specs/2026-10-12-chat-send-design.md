@@ -105,7 +105,7 @@ Body: `{ text: string }`. The token check already covers it.
 | Empty after cleaning | 400 `{ error: "empty" }` |
 | Over `SEND_CAP` | 413 |
 | Unknown session | 404 |
-| Bot has a held permission (including `AskUserQuestion`) | 409 |
+| Bot has a held permission (including `AskUserQuestion`), or is `needs_input` with none held (a dialog may be open, e.g. after a daemon restart) | 409 |
 | `bot.terminal` missing or not cmux | 422 |
 | cmux fails or times out | 502 `{ error: <stderr> }` |
 | Sent | 204 |
@@ -151,7 +151,7 @@ SEND button, and a one-line status under them.
   | :- | :- |
   | `bot.terminal` missing | "Read-only: Hamlet can't find this session's terminal." |
   | `bot.terminal.kind === "wt"` | "Read-only: sending works for cmux sessions only. This one runs in Windows Terminal." |
-  | `bot.permission` set | "Answer the WAITING prompt first." |
+  | `bot.permission` set, or `state` is `needs_input` | "Answer the WAITING prompt first." |
   | Bot gone (session ended) | "This session has ended." |
 
   `updateChat` already runs on every bot change, so it also re-evaluates these.
