@@ -12,6 +12,7 @@ const root = document.querySelector<HTMLElement>(".chat")!;
 const PER_FRAME = 200;
 
 let source: EventSource | undefined;
+let retry: ReturnType<typeof setTimeout> | undefined;
 let sessionId: string | undefined;
 let log: HTMLElement | undefined;
 const seen = new Seen();
@@ -45,14 +46,25 @@ export function openChat(bot: Bot, name: string): void {
     if (following) root.querySelector<HTMLElement>(".jump")!.hidden = true;
   });
   updateChat(bot, name);
-  source = new EventSource(`${API_PREFIX}/sessions/${encodeURIComponent(bot.sessionId)}/chat`);
-  source.onmessage = (e) => receive(JSON.parse(e.data) as ChatEvent);
+  connect(bot.sessionId);
   log.focus();
+}
+
+function connect(id: string): void {
+  const s = (source = new EventSource(`${API_PREFIX}/sessions/${encodeURIComponent(id)}/chat`));
+  s.onmessage = (e) => receive(JSON.parse(e.data) as ChatEvent);
+  // A non-200 reply (the daemon is down or restarting) closes the stream for good: open a new one.
+  s.onerror = () => {
+    if (s.readyState !== EventSource.CLOSED || source !== s) return;
+    showNote("Lost the daemon. Reconnecting…");
+    retry = setTimeout(() => connect(id), 2000);
+  };
 }
 
 export function closeChat(): void {
   source?.close();
   source = undefined;
+  clearTimeout(retry);
   sessionId = undefined;
   reset();
   log = undefined;
