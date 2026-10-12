@@ -55,7 +55,7 @@ test("the chat endpoint needs the token and a known session", async () => {
   assert.equal((await fetch(`${base}/api/sessions/nope/chat`, { headers: auth })).status, 404);
 });
 
-test("the chat streams the backlog, then appended entries", async () => {
+test("the chat streams the backlog, then appended entries", { timeout: 10_000 }, async () => {
   const path = join(home, "s1.jsonl");
   writeFileSync(path, line("u1", { type: "user", message: { content: "hello" } }));
   await hook({ session_id: "s1", hook_event_name: "UserPromptSubmit", transcript_path: path, prompt: "hello" });
@@ -73,7 +73,7 @@ test("the chat streams the backlog, then appended entries", async () => {
   );
 });
 
-test("a session without a transcript waits for one", async () => {
+test("a session without a transcript waits for one", { timeout: 10_000 }, async () => {
   await hook({ session_id: "s2", hook_event_name: "UserPromptSubmit", prompt: "hi" });
   const path = join(home, "s2.jsonl");
   writeFileSync(path, line("u2", { type: "user", message: { content: "later" } }));
