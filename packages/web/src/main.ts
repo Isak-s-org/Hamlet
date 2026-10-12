@@ -564,7 +564,7 @@ events.onmessage = (e) => {
 };
 events.onerror = () => {
   offline = true;
-  if (!introDone) progress(0.35, "Daemon offline. Start it with pnpm daemon.");
+  if (!introDone) progress(0.35, "Daemon offline. Start it with npx hamlet-village.");
   render();
 };
 setInterval(render, 5000); // keeps "waiting for" ages fresh
