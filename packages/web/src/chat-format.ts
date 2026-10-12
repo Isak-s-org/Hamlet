@@ -126,5 +126,6 @@ export function sendBlock(bot: Bot | undefined): { reason: string; readOnly: boo
   if (!bot) return { reason: "This session has ended.", readOnly: true };
   if (!bot.terminal) return { reason: "Read-only: Hamlet can't find this session's terminal.", readOnly: true };
   if (bot.terminal.kind !== "cmux") return { reason: "Read-only: sending works for cmux sessions only. This one runs in Windows Terminal.", readOnly: true };
-  if (bot.permission) return { reason: "Answer the WAITING prompt first.", readOnly: false };
+  // Waiting with no request held still means a dialog may be open in the terminal.
+  if (bot.permission || bot.state === "needs_input") return { reason: "Answer the WAITING prompt first.", readOnly: false };
 }
