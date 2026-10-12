@@ -143,6 +143,7 @@ function showNote(text: string): void {
 
 function receive(e: ChatEvent): void {
   if ("reset" in e) return reset();
+  if ("commands" in e) return;
   if ("error" in e)
     return showNote(e.error === "no-transcript" ? "Waiting for this session's transcript…" : "Couldn't read this session's transcript. The daemon log has the error.");
   showNote("");
