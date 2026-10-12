@@ -43,6 +43,7 @@ test("edits show removed then added lines; Write shows only added ones", () => {
   );
   assert.equal(diffHtml("Write", { content: "x" }), `<pre class="diff"><span class="add">+ x</span></pre>`);
   assert.equal(diffHtml("MultiEdit", { edits: [{ old_string: "a", new_string: "b" }, { old_string: "c", new_string: "" }] })!.match(/<pre/g)!.length, 2);
+  assert.equal(diffHtml("MultiEdit", { edits: [null, { old_string: "a" }] })!.match(/<pre/g)!.length, 2);
   assert.equal(diffHtml("Bash", { command: "ls" }), undefined);
 });
 
