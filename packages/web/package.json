@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@hamlet/shared": "workspace:*",
+    "motion": "13.4.4",
     "three": "^0.186.1"
   },
   "devDependencies": {
