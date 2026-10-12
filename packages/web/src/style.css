@@ -317,6 +317,8 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .chat .subtitle { font-size: 13px; color: var(--i-mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat .pill { border: 1px solid currentColor; background: none; border-radius: 3px; padding: 4px 8px; font: 700 11px var(--mono) !important; letter-spacing: .08em; color: var(--i-amber-t) !important; }
 .chat .log { flex: 1; overflow: auto; padding: 16px 20px 56px; display: flex; flex-direction: column; gap: 10px; outline: none; }
+/* Entries off screen skip layout and paint until scrolled to; a long chat stays cheap. */
+.chat .log > * { content-visibility: auto; contain-intrinsic-size: auto 60px; }
 .chat > .note { margin: 0; padding: 8px 20px; font: 12px var(--mono); color: var(--i-soft); border-top: 1px solid var(--i-line); }
 .chat .jump { position: absolute; bottom: 20px; left: 50%; translate: -50% 0; padding: 6px 12px; font: 700 11px var(--mono) !important; letter-spacing: .08em; }
 .chat .prompt { display: flex; gap: 8px; padding: 8px 10px; background: var(--i-sel); border-radius: 3px; }
