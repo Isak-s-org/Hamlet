@@ -1,5 +1,4 @@
-#!/usr/bin/env -S npx tsx
-// `hamlet install-hooks` / `uninstall-hooks`: merges Hamlet's HTTP hooks into
+// `hamlet install` / `uninstall`: merges Hamlet's HTTP hooks into
 // ~/.claude/settings.json, leaving every other hook untouched.
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

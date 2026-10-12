@@ -131,6 +131,25 @@ importers:
         specifier: ^5.0.0
         version: 5.12.5
 
+  packages/hamlet:
+    dependencies:
+      fastify:
+        specifier: ^5.0.0
+        version: 5.12.5
+    devDependencies:
+      '@hamlet/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@hamlet/installer':
+        specifier: workspace:*
+        version: link:../installer
+      '@hamlet/web':
+        specifier: workspace:*
+        version: link:../web
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+
   packages/installer:
     dependencies:
       '@hamlet/shared':
