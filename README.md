@@ -12,7 +12,7 @@ the village instead of hunting for the right terminal.
 
 ## Quickstart
 
-You need Node.js 22+, pnpm 8, [Claude Code](https://claude.com/claude-code) and a browser with
+You need Node.js 22+, pnpm 12, [Claude Code](https://claude.com/claude-code) and a browser with
 WebGPU support.
 
 ```sh
@@ -76,6 +76,43 @@ requests until you answer them, and streams updates to the web UI.
 
 Everything runs on your machine. Hooks only talk to `127.0.0.1`, and every request is checked
 against a random token stored in Hamlet's app-data directory.
+
+## Troubleshooting
+
+### No "Open terminal" button
+
+The button (and `T`) only appears for sessions running in cmux or Windows Terminal, because
+Hamlet learns where a session lives from `CMUX_SURFACE_ID` and `CMUX_WORKSPACE_ID` or
+`WT_SESSION`.
+
+In cmux, those variables can be missing even though your shell has them. cmux's `claude` wrapper
+removes every `CMUX_*` variable before starting Claude Code when it can't reach the cmux socket.
+To check, open a new cmux tab and run, before starting `claude`:
+
+```sh
+env | grep -E '^CMUX_(SURFACE_ID|WORKSPACE_ID|SOCKET_PATH)='; cmux ping
+```
+
+If the variables are set but `cmux ping` says `Socket not found at ~/.local/state/cmux/cmux.sock`,
+cmux couldn't create its socket. A common cause is `~/.local` or `~/.local/state` being owned by
+root (some installers create it with `sudo`). Check with `ls -ld ~/.local ~/.local/state`, then
+take ownership:
+
+```sh
+sudo chown -R "$USER":staff ~/.local
+```
+
+Without admin rights, replace the folder with a copy you own instead. You own your home folder,
+so the rename is allowed, but the old root-owned folder can't be deleted without admin:
+
+```sh
+cp -Rp ~/.local ~/.local.new
+mv ~/.local ~/.local.root-owned
+mv ~/.local.new ~/.local
+```
+
+Then quit cmux completely (⌘Q), reopen it, and check that `cmux ping` answers. Sessions started
+from then on get the button; restart any that were already running.
 
 ## Development
 

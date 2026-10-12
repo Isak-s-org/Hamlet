@@ -10,7 +10,7 @@ pnpm typecheck
 pnpm test
 ```
 
-You need Node.js 22+ and pnpm 8. See the [README](README.md) for running the daemon and the UI.
+You need Node.js 22+ and pnpm 12. See the [README](README.md) for running the daemon and the UI.
 
 ## Pull requests
 
