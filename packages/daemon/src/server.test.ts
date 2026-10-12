@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { after, before, test } from "node:test";
 import type { ChatEvent } from "@hamlet/shared";
 
@@ -16,7 +16,8 @@ const bin = join(home, "bin");
 const cmuxLog = join(home, "cmux.log");
 const cmuxFail = join(home, "cmux-fail");
 mkdirSync(bin);
-writeFileSync(join(bin, "cmux"), `#!/bin/sh\n[ -f "${cmuxFail}" ] && { echo "surface not found" >&2; exit 1; }\nprintf '%s\\n' "$@" >> "${cmuxLog}"\n`, { mode: 0o755 });
+writeFileSync(join(bin, "cmux"), `#!/bin/sh\n[ -f "${cmuxFail}" ] && { echo "surface not found" >&2; exit 1; }\n[ "$1" = new-surface ] && echo "OK S1 P1 W1"\nprintf '%s\\n' "$@" >> "${cmuxLog}"\n`, { mode: 0o755 });
+writeFileSync(join(bin, "open"), "#!/bin/sh\n", { mode: 0o755 });
 // An empty CLAUDE_CONFIG_DIR keeps the session registry scan away from the real ~/.claude.
 const daemon = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
   env: { ...process.env, HAMLET_HOME: home, CLAUDE_CONFIG_DIR: join(home, "claude"), PATH: `${bin}:${process.env.PATH}` },
@@ -144,4 +145,39 @@ test("a cmux failure comes back as 502 with its message", async () => {
   } finally {
     rmSync(cmuxFail);
   }
+});
+
+test("stop presses Esc in the session's surface and marks it idle; other keys are refused", async () => {
+  await hook({ session_id: "k1", hook_event_name: "UserPromptSubmit", prompt: "go" }, inCmux);
+  const press = (key: string) => fetch(`${base}/api/sessions/k1/key/${key}`, { method: "POST", headers: auth });
+  assert.equal((await press("enter")).status, 404);
+  writeFileSync(cmuxLog, "");
+  assert.equal((await press("stop")).status, 204);
+  assert.deepEqual(readFileSync(cmuxLog, "utf8").trimEnd().split("\n"), ["send-key", "--workspace", WORKSPACE, "--surface", SURFACE, "escape"]);
+  const [snapshot] = (await events("/api/stream", (seen) => seen.length > 0)) as unknown as { bots: { sessionId: string; state: string }[] }[];
+  assert.equal(snapshot!.bots.find((b) => b.sessionId === "k1")?.state, "idle");
+});
+
+test("a new agent starts in a cmux workspace at the root of a repo with a live session", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "hamlet-repo-")));
+  mkdirSync(join(root, "sub"));
+  execFileSync("git", ["init", "-q", root]);
+  await hook({ session_id: "n1", hook_event_name: "Stop", cwd: join(root, "sub") });
+  const spawnIn = (repo: string) => fetch(`${base}/api/repos/${encodeURIComponent(repo)}/new`, { method: "POST", headers: auth });
+  assert.equal((await spawnIn("nope")).status, 404);
+  writeFileSync(cmuxLog, "");
+  assert.equal((await spawnIn(basename(root))).status, 204);
+  const args = readFileSync(cmuxLog, "utf8").trimEnd().split("\n");
+  assert.deepEqual(args, ["new-workspace", "--cwd", root, "--name", basename(root), "--command", "claude", "--focus", "true"]);
+  // With an agent of the repo in cmux, the new one opens as a tab in its workspace.
+  await hook({ session_id: "n2", hook_event_name: "Stop", cwd: root }, inCmux);
+  writeFileSync(cmuxLog, "");
+  assert.equal((await spawnIn(basename(root))).status, 204);
+  const tab = readFileSync(cmuxLog, "utf8").trimEnd().split("\n");
+  assert.deepEqual(tab.slice(0, 18), [
+    "new-surface", "--workspace", WORKSPACE, "--working-directory", root, "--id-format", "uuids",
+    "send", "--workspace", WORKSPACE, "--surface", "S1", "claude\\n",
+    "focus-panel", "--panel", "S1", "--workspace", WORKSPACE,
+  ]);
+  rmSync(root, { recursive: true });
 });

@@ -47,6 +47,13 @@ export async function sendText(t: CmuxTerminal, text: string): Promise<void> {
   await run("cmux", pasteArgs(t, text), { timeout: 5000 });
 }
 
+/** Keys the chat may press in a session's terminal: Esc interrupts the turn, ctrl+enter sends the queued messages now. */
+export const KEYS = { stop: "escape", "send-now": "ctrl+enter" } as const;
+
+export async function sendKey(t: CmuxTerminal, key: (typeof KEYS)[keyof typeof KEYS]): Promise<void> {
+  await run("cmux", ["send-key", "--workspace", t.workspaceId, "--surface", t.surfaceId, key], { timeout: 5000 });
+}
+
 export async function focusTerminal(t: Terminal): Promise<void> {
   if (t.kind === "cmux") {
     await run("cmux", ["focus-panel", "--panel", t.surfaceId, "--workspace", t.workspaceId]);
@@ -59,4 +66,21 @@ export async function focusTerminal(t: Terminal): Promise<void> {
     "-Command",
     "$p = Get-Process WindowsTerminal -ErrorAction Stop | Select-Object -First 1; (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null",
   ]);
+}
+
+/**
+ * Starts a new Claude Code session as a tab in `workspaceId`, or in its own cmux workspace without one;
+ * its hooks then bring it into the village.
+ */
+export async function newAgent(cwd: string, name: string, workspaceId?: string): Promise<void> {
+  if (workspaceId) {
+    // cmux's new-surface takes no command, so `claude` is typed into the tab's shell. It prints "OK <surface> <pane> <workspace>".
+    const { stdout } = await run("cmux", ["new-surface", "--workspace", workspaceId, "--working-directory", cwd, "--id-format", "uuids"], { timeout: 5000 });
+    const surfaceId = stdout.split(" ")[1]?.trim();
+    if (!surfaceId) throw { stderr: "cmux opened no tab" };
+    await run("cmux", ["send", "--workspace", workspaceId, "--surface", surfaceId, "claude\\n"], { timeout: 5000 });
+    return focusTerminal({ kind: "cmux", surfaceId, workspaceId });
+  }
+  await run("cmux", ["new-workspace", "--cwd", cwd, "--name", name, "--command", "claude", "--focus", "true"], { timeout: 5000 });
+  if (process.platform === "darwin") await run("open", ["-b", "com.cmuxterm.app"]);
 }

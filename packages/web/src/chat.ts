@@ -59,6 +59,10 @@ const drafts = new Map<string, string>();
 let commands: Command[] = [];
 /** The chat's bot as of the last update; undefined once its session has ended. */
 let current: Bot | undefined;
+/** The chat's cmux surface, kept after its session ends: /clear starts the next session in it. */
+let surface: string | undefined;
+/** Messages typed while Claude works, waiting for the turn to take them. */
+let inQueue: string[] = [];
 /** The message on its way, and its session: the chat can close and reopen before cmux answers. */
 let inFlight: { id: string; text: string } | undefined;
 let menu: MenuCommand[] = [];
@@ -68,6 +72,7 @@ const TOO_LONG = `Too long to send (max ${SEND_CAP / 1024} KB).`;
 
 export const chatOpen = () => !root.hidden && !closing;
 export const chatSession = () => (chatOpen() ? sessionId : undefined);
+export const chatSurface = () => (chatOpen() ? surface : undefined);
 
 /** The sheet's width, or 0 on a narrow screen, where it covers everything and the village needs no room. */
 const sheetWidth = () => (innerWidth < 720 ? 0 : Math.min(560, innerWidth));
@@ -75,6 +80,15 @@ let hooks: { inset(px: number): void; loadMarkdown(): void } = { inset() {}, loa
 /** main.ts owns the world: the sheet tells it how much of the view it covers. */
 export const setChatHooks = (h: typeof hooks) => void (hooks = h);
 addEventListener("resize", () => !root.hidden && !closing && hooks.inset(sheetWidth()));
+
+/** Like iOS, a scroller in the sheet shows its scrollbar only while it moves. Scroll doesn't bubble, so this listens in capture. */
+const scrollTimers = new WeakMap<Element, ReturnType<typeof setTimeout>>();
+root.addEventListener("scroll", (e) => {
+  const el = e.target as HTMLElement;
+  el.classList.add("scrolling");
+  clearTimeout(scrollTimers.get(el));
+  scrollTimers.set(el, setTimeout(() => el.classList.remove("scrolling"), 800));
+}, true);
 
 /**
  * Opens the sheet on `bot`, or switches an open sheet to it in place. `focus`: put the caret in the
@@ -117,10 +131,14 @@ function build(): void {
     <p class="note" hidden></p>
     <form class="composer">
       <ul class="menu" id="chat-menu" role="listbox" aria-label="Commands" hidden></ul>
+      <div class="queued" hidden>
+        <div class="top"><span class="label">QUEUED</span><button class="outline" type="button" data-key="send-now" title="Interrupt Claude and send the queued messages now">SEND NOW</button></div>
+        <ol></ol>
+      </div>
       <div class="card">
         <div class="top"><span class="label">MESSAGE</span><span class="hints">⏎ SEND · ⇧⏎ NEW LINE · / COMMANDS</span></div>
         <textarea rows="1" role="combobox" aria-label="Message" aria-controls="chat-menu" aria-autocomplete="list" aria-expanded="false" placeholder="Message this session"></textarea>
-        <div class="foot"><p class="status" aria-live="polite"></p><button class="primary" type="submit">[⏎] SEND</button></div>
+        <div class="foot"><p class="status" aria-live="polite"></p><button class="outline" type="button" data-key="stop" title="Interrupt Claude's turn, like Esc in the terminal" hidden>■ STOP</button><button class="primary" type="submit">[⏎] SEND</button></div>
       </div>
     </form>`;
   const el = root.querySelector<HTMLElement>(".log")!;
@@ -142,6 +160,7 @@ function build(): void {
     e.preventDefault();
     void send();
   });
+  for (const b of root.querySelectorAll<HTMLButtonElement>(".composer [data-key]")) b.addEventListener("click", () => void press(b.dataset.key!));
   // mousedown, not click: the textarea keeps focus.
   root.querySelector(".menu")!.addEventListener("mousedown", (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>("li[data-i]");
@@ -217,6 +236,7 @@ export function updateChat(bot: Bot | undefined, name: string): void {
   pill.textContent = bot?.permission ? `WAITING · ${bot.permission.toolName}` : "WAITING";
   pill.title = "Close the chat to answer in the bubble";
   current = bot;
+  if (bot) surface = bot.terminal?.kind === "cmux" ? bot.terminal.surfaceId : undefined;
   refreshComposer();
 }
 
@@ -235,6 +255,8 @@ function reset(): void {
   orphans.clear();
   commands = [];
   closeMenu();
+  inQueue = [];
+  renderQueue();
   queue = [];
   older = [];
   clearTimeout(backlogTimer);
@@ -257,6 +279,7 @@ function showNote(text: string): void {
 
 function receive(e: ChatEvent): void {
   if ("reset" in e) return reset();
+  if ("queued" in e) return (inQueue = e.queued), renderQueue();
   if ("commands" in e) {
     commands = e.commands;
     return refreshMenu();
@@ -450,7 +473,9 @@ function refreshComposer(): void {
   ta.disabled = !!block?.readOnly;
   root.querySelector(".composer .label")!.textContent = block?.label ?? "MESSAGE";
   root.querySelector(".composer .card")!.classList.toggle("blocked", !!block);
-  root.querySelector<HTMLButtonElement>(".composer button")!.disabled = !!block || inFlight?.id === sessionId || !ta.value.trim();
+  root.querySelector<HTMLButtonElement>(".composer [type=submit]")!.disabled = !!block || inFlight?.id === sessionId || !ta.value.trim();
+  // Interrupting is for a turn in progress; a waiting one is answered in the bubble.
+  for (const b of root.querySelectorAll<HTMLElement>(".composer [data-key]")) b.hidden = !!block || current?.state !== "working";
   if (block) setStatus(block.reason, "sticky");
   else if (root.querySelector<HTMLElement>(".composer .status")?.dataset.kind === "sticky") setStatus("");
   if (ta.disabled && menu.length) closeMenu();
@@ -486,7 +511,7 @@ async function send(): Promise<void> {
     });
     if (res.ok) {
       if (drafts.get(id) === sent.text) drafts.delete(id);
-      status = [queued ? "Queued: Claude picks it up after the current step." : "Sent.", "info", true];
+      status = [queued ? "Queued: Claude picks it up after the current step, or SEND NOW." : "Sent.", "info", true];
     } else status = [await failure(res), "error", false];
   } catch {
     status = ["Couldn't reach the daemon.", "error", false];
@@ -501,6 +526,24 @@ async function send(): Promise<void> {
   grow();
   setStatus(...status);
   refreshComposer();
+}
+
+function renderQueue(): void {
+  const box = root.querySelector<HTMLElement>(".composer .queued");
+  if (!box) return;
+  box.hidden = !inQueue.length;
+  box.querySelector("ol")!.innerHTML = inQueue.map((q) => `<li>${esc(q)}</li>`).join("");
+}
+
+/** Presses a key in the session's terminal: "stop" (Esc) or "send-now" (ctrl+enter). */
+async function press(key: string): Promise<void> {
+  const id = sessionId;
+  if (!id) return;
+  const res = await fetch(`${API_PREFIX}/sessions/${encodeURIComponent(id)}/key/${key}`, { method: "POST" }).catch(() => undefined);
+  if (sessionId !== id) return;
+  if (!res) setStatus("Couldn't reach the daemon.", "error");
+  else if (!res.ok) setStatus(await failure(res), "error");
+  else if (key === "stop") setStatus("Stopped.", "info", true);
 }
 
 async function failure(res: Response): Promise<string> {

@@ -18,10 +18,10 @@ import {
   type Decision,
   type Question,
 } from "@hamlet/shared";
-import { bots, cwdOf, discover, hold, prune, release, retitle, sweep, track } from "./bots.js";
+import { bots, cwdOf, discover, hold, interrupt, prune, release, retitle, sweep, track } from "./bots.js";
 import { findTranscript, liveSessions, terminalHeaders } from "./registry.js";
 import { Feeds } from "./feed.js";
-import { cleanText, cmuxError, focusTerminal, sendText, target } from "./terminal.js";
+import { cleanText, cmuxError, focusTerminal, KEYS, newAgent, sendKey, sendText, target, type CmuxTerminal } from "./terminal.js";
 import { forgetTranscript, isTranscriptPath, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
@@ -139,6 +139,16 @@ function gitPlace(cwd: string) {
   return place;
 }
 
+/** The repo's main checkout, so a new agent starts at its root rather than in one session's subfolder or worktree. */
+async function checkoutOf(cwd: string): Promise<string> {
+  try {
+    const common = (await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd })).stdout.trim();
+    return common.endsWith(".git") ? dirname(common) : cwd;
+  } catch {
+    return cwd;
+  }
+}
+
 const streams = new Set<ServerResponse>();
 
 function broadcast(): void {
@@ -201,6 +211,8 @@ app.post(HOOK_PATH, async (request, reply) => {
     transcripts.delete(sessionId);
     feeds.drop(sessionId);
     if (transcript) forgetTranscript(transcript);
+    // /clear and /resume start the next session in the same process with no SessionStart hook; its registry file names it.
+    setTimeout(() => void scanSessions().catch((e) => log({ kind: "registry-error", error: String(e) })), 1000).unref();
   } else if (bot && transcript) {
     // Only the main thread's path is the session's transcript.
     if (body.agent_id === undefined) transcripts.set(bot.sessionId, transcript);
@@ -312,6 +324,22 @@ app.post(`${API_PREFIX}/terminal`, async (request, reply) => {
   return reply.code(204).send();
 });
 
+// The folder comes from a session Hamlet already knows, never from the request, so the UI can't pick an arbitrary path.
+app.post(`${API_PREFIX}/repos/:repo/new`, async (request, reply) => {
+  const { repo } = request.params as { repo: string };
+  const bot = [...bots.values()].find((b) => b.repo === repo && b.cwd);
+  if (!bot) return reply.code(404).send();
+  // Beside the repo's other agents when one of them runs in cmux.
+  const cmux = [...bots.values()].find((b) => b.repo === repo && b.terminal?.kind === "cmux")?.terminal as CmuxTerminal | undefined;
+  try {
+    await newAgent(await checkoutOf(bot.cwd), repo, cmux?.workspaceId);
+  } catch (e) {
+    return reply.code(502).send({ error: cmuxError(e as { killed?: boolean; stderr?: string }) });
+  }
+  log({ kind: "new-agent", repo });
+  return reply.code(204).send();
+});
+
 app.post(`${API_PREFIX}/sessions/:id/send`, async (request, reply) => {
   const { id } = request.params as { id: string };
   const { text } = (request.body ?? {}) as { text?: unknown };
@@ -327,6 +355,22 @@ app.post(`${API_PREFIX}/sessions/:id/send`, async (request, reply) => {
     return reply.code(502).send({ error: cmuxError(e as { killed?: boolean; stderr?: string }) });
   }
   log({ kind: "sent", sessionId: id, chars: clean.text.length });
+  return reply.code(204).send();
+});
+
+app.post(`${API_PREFIX}/sessions/:id/key/:key`, async (request, reply) => {
+  const { id, key } = request.params as { id: string; key: string };
+  if (!Object.hasOwn(KEYS, key)) return reply.code(404).send();
+  // A key pressed into an open dialog would answer it.
+  const to = target(bots.get(id));
+  if ("refuse" in to) return reply.code(to.refuse).send();
+  try {
+    await sendKey(to.terminal, KEYS[key as keyof typeof KEYS]);
+  } catch (e) {
+    return reply.code(502).send({ error: cmuxError(e as { killed?: boolean; stderr?: string }) });
+  }
+  if (key === "stop") interrupt(id), broadcast();
+  log({ kind: "key", sessionId: id, key });
   return reply.code(204).send();
 });
 

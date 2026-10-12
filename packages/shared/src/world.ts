@@ -76,7 +76,8 @@ export interface Command {
 }
 
 /** One message of GET /api/sessions/:id/chat. */
-export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" } | { commands: Command[] };
+/** `queued`: messages typed while Claude works, oldest first, waiting for the turn to take them. */
+export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" } | { commands: Command[] } | { queued: string[] };
 
 /** Longest message POST /api/sessions/:id/send takes, in UTF-8 bytes. */
 export const SEND_CAP = 64 * 1024;
