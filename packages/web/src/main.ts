@@ -1,6 +1,7 @@
 import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
 import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, updateChat } from "./chat.js";
 import { esc } from "./chat-format.js";
+import { pop } from "./motion.js";
 import { nameAll } from "./names.js";
 import { createWorld, type World } from "./world/engine.js";
 
@@ -340,10 +341,12 @@ function renderBubble(force = false): void {
   const key = JSON.stringify([b.sessionId, b.state, b.branch, b.permission?.id, !!b.terminal, error, b.title, b.activity, nameOf(b)]);
   // Only the age ticks between real changes; rebuilding would reset the preview's scroll.
   if (key === bubbleKey && !force) return void (bubble.querySelector(".state")!.textContent = state);
+  // A forced rebuild of the same content (a pick, an error cleared) shouldn't make it jump.
+  const changed = key !== bubbleKey;
   bubbleKey = key;
   const p = b.permission;
   bubble.className = `panel bubble open ${b.state}`;
-  bubble.innerHTML = `<div class="bar"></div>
+  bubble.innerHTML = `<div class="pop"><div class="bar"></div>
     <header>
       <span class="head">
         <span class="state">${state}</span>
@@ -364,7 +367,8 @@ function renderBubble(force = false): void {
              <button class="outline" data-act="deny">[D] DENY</button>
            </div>`
         : `${b.state === "working" ? `<span class="kv">NOW   <b>${esc(b.activity ?? "Thinking…")}</b></span>` : ""}<span class="cwd">CWD   ${esc(b.cwd)}</span>${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
-    }<div class="actions"><button class="outline" data-act="chat" title="Read this session's conversation">[C] CHAT</button>${b.terminal ? `<button class="primary" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button>` : ""}</div>${error ? `<p class="error">${esc(error)}</p>` : ""}</div>`;
+    }<div class="actions"><button class="outline" data-act="chat" title="Read this session's conversation">[C] CHAT</button>${b.terminal ? `<button class="primary" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button>` : ""}</div>${error ? `<p class="error">${esc(error)}</p>` : ""}</div></div>`;
+  if (changed) pop(bubble.querySelector<HTMLElement>(".pop")!);
 }
 
 function questionsHtml(p: PendingPermission, qs: Question[]): string {
