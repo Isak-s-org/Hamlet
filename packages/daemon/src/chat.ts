@@ -1,6 +1,6 @@
 // Turns Claude Code transcript lines into chat entries for the web app's chat view. Pure, so the
 // rules can be tested on lines copied from real transcripts.
-import type { ChatEntry } from "@hamlet/shared";
+import type { ChatEntry, Command } from "@hamlet/shared";
 
 /** Longest tool result or input string sent to the browser, so a 20 MB transcript still opens quickly. */
 export const TEXT_CAP = 32 * 1024;
@@ -100,4 +100,29 @@ function convert(e: Line, parent?: string): ChatEntry[] {
     if (n) out.push({ ...base(0), kind: "notice", ...n });
   }
   return out;
+}
+
+const DESCRIPTION_CAP = 200;
+
+/**
+ * The commands a `skill_listing` attachment lists: the skills, custom and plugin commands the session
+ * can run. `initial` lists replace what came before; later ones add to it. Never throws.
+ */
+export function commandsIn(line: string): { commands: Command[]; initial: boolean } | undefined {
+  // Every transcript line passes through here; most can be skipped without parsing.
+  if (!line.includes('"skill_listing"')) return;
+  try {
+    const a = JSON.parse(line)?.attachment;
+    if (a?.type !== "skill_listing" || !Array.isArray(a.names) || !a.names.every((n: unknown) => typeof n === "string")) return;
+    // `content` has one "- <name>: <description>" row per name; names never contain ": ".
+    const described = new Map<string, string>();
+    for (const row of String(a.content ?? "").split("\n")) {
+      const at = row.indexOf(": ");
+      if (row.startsWith("- ") && at > 2) described.set(row.slice(2, at), row.slice(at + 2).trim());
+    }
+    const cut = (d: string) => (d.length > DESCRIPTION_CAP ? `${d.slice(0, DESCRIPTION_CAP - 1)}…` : d);
+    return { initial: a.isInitial !== false, commands: (a.names as string[]).map((name) => ({ name, description: cut(described.get(name) ?? "") })) };
+  } catch {
+    return;
+  }
 }

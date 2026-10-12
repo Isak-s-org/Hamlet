@@ -146,3 +146,41 @@ test("a path change moves the viewers to the new feed", async () => {
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(feeds.size, 0);
 });
+
+const skills = (names: string[], isInitial = true) =>
+  JSON.stringify({ type: "attachment", uuid: `l-${names.join()}`, timestamp: "t", attachment: { type: "skill_listing", isInitial, names, content: names.map((n) => `- ${n}: about ${n}`).join("\n") } }) + "\n";
+const commandEvents = (events: ChatEvent[]) => events.flatMap((e) => ("commands" in e ? [e.commands.map((c) => c.name)] : []));
+
+test("a feed sends the session's commands after the backlog, and each change", async () => {
+  const { path } = session();
+  writeFileSync(path, prompt(1) + skills(["init", "review"]));
+  const feed = new ChatFeed(path);
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(commandEvents(events), [["init", "review"]]);
+  assert.ok("entries" in events[0]!);
+  appendFileSync(path, skills(["deploy"], false));
+  await feed.poll();
+  assert.deepEqual(commandEvents(events).at(-1), ["init", "review", "deploy"]);
+  const late: ChatEvent[] = [];
+  feed.subscribe((e) => late.push(e));
+  assert.deepEqual(commandEvents(late), [["init", "review", "deploy"]]);
+  appendFileSync(path, skills(["only"]));
+  await feed.poll();
+  assert.deepEqual(commandEvents(late).at(-1), ["only"]);
+});
+
+test("a subagent's skill listing is not the session's", async () => {
+  const { dir, path } = session();
+  writeFileSync(path, prompt(1));
+  const subs = join(dir, "s1", "subagents");
+  mkdirSync(subs, { recursive: true });
+  writeFileSync(join(subs, "agent-x.jsonl"), skills(["sub-only"]));
+  writeFileSync(join(subs, "agent-x.meta.json"), JSON.stringify({ toolUseId: "toolu_P" }));
+  const feed = new ChatFeed(path);
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(commandEvents(events), []);
+});
