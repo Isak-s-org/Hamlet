@@ -3,6 +3,7 @@
 // session stays light.
 import { API_PREFIX, type Bot, type ChatEntry, type ChatEvent } from "@hamlet/shared/world";
 import { esc, inputHtml, isAgent, resultHtml, Seen, textHtml, toolSummary } from "./chat-format.js";
+import { collapse, enter, expand, growFrom, shrinkTo } from "./motion.js";
 
 type Tool = Extract<ChatEntry, { kind: "tool" }>;
 type Result = Extract<ChatEntry, { kind: "result" }>;
@@ -23,12 +24,18 @@ const orphans = new Map<string, ChatEntry[]>();
 let queue: ChatEntry[] = [];
 let scheduled = false;
 let following = true;
+/** Off while the backlog shows: only entries placed after the queue first drains animate in. */
+let live = false;
+/** The chat is shrinking away: its stream is already shut, and it counts as closed. */
+let closing = false;
 
-export const chatOpen = () => !root.hidden;
+export const chatOpen = () => !root.hidden && !closing;
 export const chatSession = () => (chatOpen() ? sessionId : undefined);
 
 export function openChat(bot: Bot, name: string): void {
-  closeChat();
+  const from = bubbleRect();
+  disconnect();
+  closing = root.inert = false;
   sessionId = bot.sessionId;
   root.hidden = false;
   root.innerHTML = `<header>
@@ -48,6 +55,15 @@ export function openChat(bot: Bot, name: string): void {
   updateChat(bot, name);
   connect(bot.sessionId);
   log.focus();
+  void growFrom(root, from);
+}
+
+/** The selected bot's bubble, where the chat grows from and shrinks back to, if it's on screen. */
+function bubbleRect(): DOMRect | undefined {
+  const bubble = document.querySelector<HTMLElement>(".bubble.open");
+  if (!bubble || getComputedStyle(bubble).visibility === "hidden") return;
+  const r = bubble.getBoundingClientRect();
+  return r.width && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth ? r : undefined;
 }
 
 function connect(id: string): void {
@@ -62,14 +78,26 @@ function connect(id: string): void {
 }
 
 export function closeChat(): void {
+  if (!chatOpen()) return;
+  disconnect();
+  // Shut at once, but stays on screen (and lets clicks through) until it has shrunk away.
+  closing = root.inert = true;
+  void shrinkTo(root, bubbleRect()).then((done) => {
+    if (!done) return; // reopened mid-close: openChat has the overlay now
+    closing = root.inert = false;
+    root.hidden = true;
+    root.innerHTML = "";
+  });
+}
+
+/** Ends the stream and forgets the session's entries, leaving the overlay's DOM to the caller. */
+function disconnect(): void {
   source?.close();
   source = undefined;
   clearTimeout(retry);
   sessionId = undefined;
-  reset();
   log = undefined;
-  root.hidden = true;
-  root.innerHTML = "";
+  reset();
 }
 
 /** Header only: the name, place, title and state can change while the chat is open. */
@@ -99,6 +127,7 @@ function reset(): void {
   results.clear();
   orphans.clear();
   queue = [];
+  live = false;
   // A cleared log starts pinned to the end again.
   following = true;
   const jump = root.querySelector<HTMLElement>(".jump");
@@ -125,24 +154,31 @@ function drain(): void {
   scheduled = false;
   if (!log) return;
   const batch = queue.splice(0, PER_FRAME);
-  for (const entry of batch) place(entry);
+  const placed = batch.flatMap(place);
+  // The backlog appears as it is, so even a huge session opens at once.
+  if (live) enter(placed);
   if (following) log.scrollTop = log.scrollHeight;
   else if (batch.length) root.querySelector<HTMLElement>(".jump")!.hidden = false;
   if (queue.length) (scheduled = true), requestAnimationFrame(drain);
+  else live = true;
 }
 
-function place(entry: ChatEntry): void {
+/** Puts an entry on screen and returns the elements it added; a result only fills its card. */
+function place(entry: ChatEntry): HTMLElement[] {
   if (entry.kind === "result") {
     results.set(entry.toolUseId, entry);
-    return fillResult(entry.toolUseId);
+    fillResult(entry.toolUseId);
+    return [];
   }
   const parent = entry.parent ? cards.get(entry.parent) : undefined;
-  if (entry.parent && !parent) return void orphans.set(entry.parent, [...(orphans.get(entry.parent) ?? []), entry]);
-  (parent?.el.querySelector<HTMLElement>(".sub") ?? log!).append(element(entry));
-  if (entry.kind !== "tool") return;
-  for (const child of orphans.get(entry.id) ?? []) place(child);
+  if (entry.parent && !parent) return orphans.set(entry.parent, [...(orphans.get(entry.parent) ?? []), entry]), [];
+  const el = element(entry);
+  (parent?.el.querySelector<HTMLElement>(".sub") ?? log!).append(el);
+  if (entry.kind !== "tool") return [el];
+  const placed = [el, ...(orphans.get(entry.id) ?? []).flatMap(place)];
   orphans.delete(entry.id);
   fillResult(entry.id);
+  return placed;
 }
 
 function element(entry: Exclude<ChatEntry, Result>): HTMLElement {
@@ -150,7 +186,7 @@ function element(entry: Exclude<ChatEntry, Result>): HTMLElement {
   const el = document.createElement(entry.kind === "thinking" ? "details" : "div");
   if (entry.kind === "prompt") (el.className = "prompt"), (el.innerHTML = `<span class="caret">&gt;</span><p>${esc(entry.text)}</p>`);
   else if (entry.kind === "text") (el.className = "reply"), (el.innerHTML = textHtml(entry.text));
-  else if (entry.kind === "thinking") (el.className = "thinking"), (el.innerHTML = `<summary>Thinking</summary><p class="say">${esc(entry.text)}</p>`);
+  else if (entry.kind === "thinking") (el.className = "thinking"), (el.innerHTML = `<summary>Thinking</summary><div class="body"><p class="say">${esc(entry.text)}</p></div>`), disclose(el as HTMLDetailsElement);
   else (el.className = `notice ${entry.level}`), (el.innerHTML = `<span>${esc(entry.text)}</span>`);
   return el;
 }
@@ -159,15 +195,35 @@ function toolCard(tool: Tool): HTMLDetailsElement {
   const el = document.createElement("details");
   el.className = "tool";
   el.dataset.state = "running";
-  el.innerHTML = `<summary><span class="name">${esc(tool.name)}</span> <span class="what">${esc(toolSummary(tool.name, tool.input))}</span><span class="status"></span></summary><div class="input"></div>${isAgent(tool.name) ? `<div class="sub"></div>` : ""}<div class="result"></div>`;
-  el.addEventListener("toggle", () => {
-    if (!el.open) return;
+  el.innerHTML = `<summary><span class="name">${esc(tool.name)}</span> <span class="what">${esc(toolSummary(tool.name, tool.input))}</span><span class="status"></span></summary><div class="body"><div class="input"></div>${isAgent(tool.name) ? `<div class="sub"></div>` : ""}<div class="result"></div></div>`;
+  disclose(el, () => {
     const input = el.querySelector<HTMLElement>(".input")!;
     if (!input.innerHTML) input.innerHTML = inputHtml(tool.name, tool.input);
     fillResult(tool.id);
   });
   cards.set(tool.id, { el, tool });
   return el;
+}
+
+/** Animates a <details> open and shut. `fill` builds its body on first open, before it's measured. */
+function disclose(el: HTMLDetailsElement, fill = () => {}): void {
+  const body = el.querySelector<HTMLElement>(":scope > .body")!;
+  let shutting = false;
+  el.addEventListener("toggle", () => el.open && fill());
+  // Mouse and keyboard both arrive here as a click on the summary. Opening by hand rather than by
+  // default lets the body be built and measured before the toggle event, which can come a frame late.
+  el.querySelector("summary")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (el.open && !shutting) {
+      shutting = true;
+      void collapse(body).then((done) => done && ((el.open = false), (shutting = false)));
+    } else {
+      shutting = false;
+      el.open = true;
+      fill();
+      void expand(body);
+    }
+  });
 }
 
 /** Marks the card done or failed, and fills in the result once the card is open. */
