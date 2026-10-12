@@ -1,4 +1,5 @@
 import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
+import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, updateChat } from "./chat.js";
 import { esc } from "./chat-format.js";
 import { nameAll } from "./names.js";
 import { createWorld, type World } from "./world/engine.js";
@@ -13,8 +14,8 @@ type Settings = typeof DEFAULTS;
 type Key = keyof Settings;
 
 const THEMES: Record<string, Record<string, string>> = {
-  dark: { slab: "#1b1c20", edge: "#34363d", line: "#2c2e34", sel: "#25262b", foot: "#16171a", code: "#111214", ink: "#ece8df", soft: "#7d828c", mid: "#c9c6bf", "btn-edge": "#4a4d55", "amber-t": "#ffc21a", "red-t": "#ff6a4d", red: "#ff6a4d", "on-red": "#1b1c20", pill: "rgba(27,28,32,0.88)", shadow: "0 8px 24px rgba(20,10,0,0.25)" },
-  light: { slab: "#fbfaf7", edge: "#d9d6cf", line: "#e8e5de", sel: "#f1eee7", foot: "#f3f1ec", code: "#f3f1ec", ink: "#1b1c20", soft: "#6b6f78", mid: "#3a3d44", "btn-edge": "#b9b5ac", "amber-t": "#9a6400", "red-t": "#c7361c", red: "#d9452f", "on-red": "#fbfaf7", pill: "rgba(251,250,247,0.94)", shadow: "0 8px 24px rgba(40,25,5,0.16)" },
+  dark: { slab: "#1b1c20", edge: "#34363d", line: "#2c2e34", sel: "#25262b", foot: "#16171a", code: "#111214", ink: "#ece8df", soft: "#7d828c", mid: "#c9c6bf", "btn-edge": "#4a4d55", "amber-t": "#ffc21a", "red-t": "#ff6a4d", "green-t": "#56d364", red: "#ff6a4d", "on-red": "#1b1c20", pill: "rgba(27,28,32,0.88)", shadow: "0 8px 24px rgba(20,10,0,0.25)" },
+  light: { slab: "#fbfaf7", edge: "#d9d6cf", line: "#e8e5de", sel: "#f1eee7", foot: "#f3f1ec", code: "#f3f1ec", ink: "#1b1c20", soft: "#6b6f78", mid: "#3a3d44", "btn-edge": "#b9b5ac", "amber-t": "#9a6400", "red-t": "#c7361c", "green-t": "#1a7f37", red: "#d9452f", "on-red": "#fbfaf7", pill: "rgba(251,250,247,0.94)", shadow: "0 8px 24px rgba(40,25,5,0.16)" },
 };
 const PALETTES = [
   { name: "Amber dusk", c: ["#F2955A", "#FFE1B3"] }, { name: "Peach", c: ["#F7B58C", "#FFF0D6"] }, { name: "Ember", c: ["#E0704A", "#FFC78A"] },
@@ -183,6 +184,11 @@ async function answer(behavior: "allow" | "deny"): Promise<void> {
   }
 }
 
+function openSelectedChat(): void {
+  const b = selBot();
+  if (b) openChat(b, nameOf(b));
+}
+
 async function openTerminal(): Promise<void> {
   const b = selBot();
   if (!b?.terminal) return;
@@ -318,6 +324,11 @@ function render(): void {
 
   loading.hidden = !(introDone && offline);
   renderBubble();
+  const chatting = chatSession();
+  if (chatting) {
+    const b = bots.find((x) => x.sessionId === chatting);
+    updateChat(b, b ? nameOf(b) : chatting.slice(0, 6));
+  }
 }
 
 let bubbleKey = "";
@@ -353,7 +364,7 @@ function renderBubble(force = false): void {
              <button class="outline" data-act="deny">[D] DENY</button>
            </div>`
         : `${b.state === "working" ? `<span class="kv">NOW   <b>${esc(b.activity ?? "Thinking…")}</b></span>` : ""}<span class="cwd">CWD   ${esc(b.cwd)}</span>${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
-    }${b.terminal ? `<button class="primary terminal" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button>` : ""}${error ? `<p class="error">${esc(error)}</p>` : ""}</div>`;
+    }<div class="actions"><button class="outline" data-act="chat" title="Read this session's conversation">[C] CHAT</button>${b.terminal ? `<button class="primary" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button>` : ""}</div>${error ? `<p class="error">${esc(error)}</p>` : ""}</div>`;
 }
 
 function questionsHtml(p: PendingPermission, qs: Question[]): string {
@@ -450,6 +461,9 @@ app.addEventListener("click", (e) => {
     case "allow": case "deny": void answer(el.dataset.act); break;
     case "pick": pick(arg); break;
     case "terminal": void openTerminal(); break;
+    case "chat": openSelectedChat(); break;
+    case "chat-close": closeChat(); break;
+    case "chat-jump": jumpToEnd(); break;
     case "zoom-in": world?.zoom(-1); break;
     case "zoom-out": world?.zoom(1); break;
     case "frame": world?.frameAll(); break;
@@ -501,6 +515,11 @@ window.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
   if (/input|textarea|select/i.test(t.tagName) || t.isContentEditable) return;
   const k = e.key.toLowerCase();
+  // The chat covers the village, so only its own keys work while it's open.
+  if (chatOpen()) {
+    if (k === "escape" || k === "c") closeChat();
+    return;
+  }
   if (k === "escape") {
     if (!scrim.hidden) scrim.hidden = true;
     else if (!settingsEl.hidden) toggleSettings(false);
@@ -511,6 +530,7 @@ window.addEventListener("keydown", (e) => {
   else if (k === "a" && selBot()?.permission) void answer("allow");
   else if (k === "d" && selBot()?.permission) void answer("deny");
   else if (k === "t") void openTerminal();
+  else if (k === "c") openSelectedChat();
 });
 
 function applySnapshot(snapshot: WorldSnapshot): void {

@@ -204,7 +204,6 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 2px; }
 .actions button { padding: 8px; font: 700 12px var(--mono) !important; letter-spacing: 0.1em; }
-.bubble .terminal { align-self: flex-start; width: calc(50% - 4px); padding: 8px; margin-top: 2px; font: 700 12px var(--mono) !important; letter-spacing: 0.1em; }
 .error { margin: 0; font: 12px var(--mono); color: var(--i-red-t); }
 
 /* Settings */
@@ -293,3 +292,47 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
   color: var(--i-ink); font: 12px var(--mono); outline: none;
 }
 .other:focus { border-color: #ffc21a; }
+
+/* Chat overlay */
+.chat { position: absolute; inset: 0; z-index: 7; display: flex; flex-direction: column; background: var(--i-slab); color: var(--i-ink); }
+.chat[hidden] { display: none; }
+.chat > header { --tone: var(--i-soft); display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--i-line); }
+.chat > header.working { --tone: var(--i-mid); }
+.chat > header.needs_input { --tone: var(--i-amber-t); }
+.chat > header.errored { --tone: var(--i-red-t); }
+.chat .head { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chat .repo { font: 600 17px 'Hanken Grotesk', system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat .repo .branch { font-size: 12px; color: var(--i-soft); }
+.chat .subtitle { font-size: 13px; color: var(--i-mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat .pill { border: 1px solid currentColor; background: none; border-radius: 3px; padding: 4px 8px; font: 700 11px var(--mono) !important; letter-spacing: .08em; color: var(--i-amber-t) !important; }
+.chat .log { flex: 1; overflow: auto; padding: 16px max(20px, calc(50% - 440px)) 56px; display: flex; flex-direction: column; gap: 10px; outline: none; }
+.chat .note { margin: 0; padding: 8px 20px; font: 12px var(--mono); color: var(--i-soft); border-top: 1px solid var(--i-line); }
+.chat .jump { position: absolute; bottom: 20px; left: 50%; translate: -50% 0; padding: 6px 12px; font: 700 11px var(--mono) !important; letter-spacing: .08em; }
+.chat .prompt { display: flex; gap: 8px; padding: 8px 10px; background: var(--i-sel); border-radius: 3px; }
+.chat .prompt .caret { font: 700 13px var(--mono); color: var(--i-amber-t); }
+.chat .prompt p, .chat .say { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat .reply { display: flex; flex-direction: column; gap: 8px; }
+.chat pre { margin: 0; padding: 8px 10px; background: var(--i-code); border-radius: 3px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow: auto; }
+.chat details > summary { cursor: pointer; list-style: none; font: 12px var(--mono); color: var(--i-mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat details > summary::-webkit-details-marker { display: none; }
+.chat details > summary::before { content: '▸ '; color: var(--i-soft); }
+.chat details[open] > summary::before { content: '▾ '; }
+.chat .tool { border: 1px solid var(--i-line); border-radius: 3px; padding: 6px 10px; }
+.chat .tool[open] > * + * { margin-top: 6px; }
+.chat .tool .name { font-weight: 700; color: var(--i-ink); }
+.chat .tool .what { color: var(--i-soft); }
+.chat .tool[data-state="running"] .status::after { content: '  running…'; color: var(--i-amber-t); }
+.chat .tool[data-state="error"] { box-shadow: inset 3px 0 0 var(--i-red-t); }
+.chat .tool[data-state="error"] .status::after { content: '  error'; color: var(--i-red-t); }
+.chat .tool .path, .chat .tool .note { margin: 0; font: 11px var(--mono); color: var(--i-soft); overflow-wrap: anywhere; }
+.chat .sub { border-left: 2px solid var(--i-line); padding-left: 12px; display: flex; flex-direction: column; gap: 8px; }
+.chat .sub:empty { display: none; }
+.chat .diff span { display: block; }
+.chat .diff .del { color: var(--i-red-t); }
+.chat .diff .add { color: var(--i-green-t); }
+.chat .out.err { color: var(--i-red-t); }
+.chat .thinking > summary { color: var(--i-soft); }
+.chat .thinking .say { margin-top: 6px; color: var(--i-soft); font-style: italic; }
+.chat .notice { display: flex; align-items: center; gap: 10px; font: 11px var(--mono); color: var(--i-soft); }
+.chat .notice::before, .chat .notice::after { content: ''; flex: 1; height: 1px; background: var(--i-line); }
+.chat .notice.error { color: var(--i-red-t); }
