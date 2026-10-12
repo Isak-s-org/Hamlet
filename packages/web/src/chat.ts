@@ -87,6 +87,10 @@ function reset(): void {
   results.clear();
   orphans.clear();
   queue = [];
+  // A cleared log starts pinned to the end again.
+  following = true;
+  const jump = root.querySelector<HTMLElement>(".jump");
+  if (jump) jump.hidden = true;
 }
 
 function showNote(text: string): void {
