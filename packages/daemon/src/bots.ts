@@ -1,5 +1,5 @@
 // Bot state from hook events. No I/O, so the rules can be tested without a server.
-import type { Bot, BotState, PendingPermission } from "@hamlet/shared";
+import type { Bot, BotState, Helper, PendingPermission } from "@hamlet/shared";
 
 export const bots = new Map<string, Bot>();
 /** Held PermissionRequests by id. A session can hold several at once (parallel subagents). */
@@ -15,8 +15,8 @@ const ended = new Set<string>();
 const lastSeen = new Map<string, number>();
 /** Where each bot's title came from; a better source replaces a worse one, never the other way. */
 const titleRank = new Map<string, number>();
-/** tool_use_id behind each bot's activity, so another agent's PostToolUse doesn't clear it. */
-const activityOf = new Map<string, string>();
+/** tool_use_id behind each bot's or helper's activity, so another agent's PostToolUse doesn't clear it. */
+const activityOf = new WeakMap<Bot | Helper, string>();
 
 export type TitleSource = "prompt" | "ai" | "custom";
 const RANK: Record<TitleSource, number> = { prompt: 0, ai: 1, custom: 2 };
@@ -88,7 +88,6 @@ function forget(sessionId: string): void {
   bots.delete(sessionId);
   lastSeen.delete(sessionId);
   titleRank.delete(sessionId);
-  activityOf.delete(sessionId);
   calls.delete(sessionId);
 }
 
@@ -100,7 +99,7 @@ function setState(bot: Bot, state: BotState): void {
 
 function clearActivity(bot: Bot): void {
   delete bot.activity;
-  activityOf.delete(bot.sessionId);
+  activityOf.delete(bot);
 }
 
 /** Shows the session's oldest held request, or returns the bot to work once none is left. */
@@ -109,8 +108,8 @@ function refresh(sessionId: string): void {
   if (!bot) return;
   const next = [...held.values()].find((h) => h.sessionId === sessionId);
   if (next) {
-    const { sessionId: _, agent: __, toolUseId: ___, ...permission } = next;
-    bot.permission = permission;
+    const { sessionId: _, agent, toolUseId: __, ...permission } = next;
+    bot.permission = agent ? { ...permission, agentId: agent } : permission;
     setState(bot, "needs_input");
   } else if (bot.permission) {
     delete bot.permission;
@@ -158,6 +157,25 @@ function remember(sessionId: string, event: string, body: Record<string, any>): 
   }
 }
 
+/** Keeps the bot's running subagents. Any subagent event adds one, so those already running when the daemon started show up too. */
+function trackHelper(bot: Bot, event: string, agent: string, body: Record<string, any>): void {
+  const helpers = (bot.helpers ??= []);
+  let helper = helpers.find((h) => h.agentId === agent);
+  if (event === "SubagentStop") {
+    bot.helpers = helpers.filter((h) => h !== helper);
+    if (!bot.helpers.length) delete bot.helpers;
+    return;
+  }
+  if (!helper) helpers.push((helper = { agentId: agent }));
+  if (body.agent_type) helper.type = String(body.agent_type);
+  if (event === "PreToolUse") {
+    helper.activity = describe(String(body.tool_name), body.tool_input);
+    activityOf.set(helper, String(body.tool_use_id ?? ""));
+  } else if ((event === "PostToolUse" || event === "PostToolUseFailure") && activityOf.get(helper) === String(body.tool_use_id ?? "")) {
+    delete helper.activity;
+  }
+}
+
 /** Applies one hook event. `place` is the git repo/branch of the event's cwd. `settled` lists held requests it ended. */
 export function track(
   body: Record<string, any>,
@@ -190,14 +208,16 @@ export function track(
       ? body.notification_type === "idle_prompt" ? "idle" : undefined
       : subagent ? undefined : STATE_FOR[event] ?? "working";
   if (state) setState(bot, state);
+  if (body.agent_id !== undefined) trackHelper(bot, event, agentOf(body), body);
   if (event === "UserPromptSubmit" && !subagent && !bot.title) {
     const title = promptTitle(body.prompt);
     if (title) retitle(sessionId, title, "prompt");
   }
-  if (event === "PreToolUse" && bot.state === "working") {
+  // A subagent's tools show on its helper, so the bot keeps saying what it delegated.
+  if (event === "PreToolUse" && bot.state === "working" && body.agent_id === undefined) {
     bot.activity = describe(String(body.tool_name), body.tool_input);
-    activityOf.set(sessionId, String(body.tool_use_id ?? ""));
-  } else if ((event === "PostToolUse" || event === "PostToolUseFailure") && activityOf.get(sessionId) === String(body.tool_use_id ?? "")) {
+    activityOf.set(bot, String(body.tool_use_id ?? ""));
+  } else if ((event === "PostToolUse" || event === "PostToolUseFailure") && activityOf.get(bot) === String(body.tool_use_id ?? "")) {
     clearActivity(bot);
   }
   // A held request outranks whatever else the session is doing.

@@ -253,7 +253,8 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
   const slots = new Map();
   function applyBots(bots) {
     lastBots = bots;
-    const live = new Set(bots.map((b) => b.sessionId));
+    const helperId = (b, h) => `${b.sessionId}/${h.agentId}`;
+    const live = new Set(bots.flatMap((b) => [b.sessionId, ...(b.helpers ?? []).map((h) => helperId(b, h))]));
     for (const [id, v] of views) if (!live.has(id)) { v.dispose(); views.delete(id); }
     slots.clear();
     const seen = new Map();
@@ -268,6 +269,14 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
       if (!v) { v = new CreatureView(b, d, city, styleOf(opts)); views.set(b.sessionId, v); scene.add(v.group); labels.append(v.icon, v.tag); }
       v.data = b;
       v.setTag(b.name ?? '', b.state === 'working' ? b.activity ?? 'Thinking…' : '');
+      for (const h of b.helpers ?? []) {
+        const id = helperId(b, h);
+        const data = { sessionId: id, repo: b.repo, branch: b.branch, state: b.permission?.agentId === h.agentId ? 'needs_input' : 'working' };
+        let hv = views.get(id);
+        if (!hv) { hv = new CreatureView(data, d, city, styleOf(opts), v); views.set(id, hv); scene.add(hv.group); labels.append(hv.icon, hv.tag); }
+        hv.data = data;
+        hv.setTag(h.type ?? 'Helper', h.activity ?? 'Thinking…');
+      }
     }
   }
 
@@ -484,6 +493,9 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
     }
     const veiled = revealT < 0.5;
     updateAmbience(dt, t, builtK);
+    // A subagent's prompt shows over the helper that asked.
+    const asker = selected && views.get(selected)?.data.permission?.agentId;
+    const sel = selected ? (asker && views.get(`${selected}/${asker}`)) || views.get(selected) : null;
     for (const v of views.values()) {
       const city = cities.get(v.data.repo), d = city?.districts.get(v.data.branch);
       if (!d) continue;
@@ -496,12 +508,11 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
       const iconOn = show && !veiled && !!v.icon.textContent && place(v.icon, head);
       v.icon.style.display = iconOn ? 'grid' : 'none';
       // Name tags only up close, and not under the open bubble; they sit above the state icon.
-      const tagOn = v.group.visible && !veiled && cs.fh < TAG_MAX_FH && v.data.sessionId !== selected && place(v.tag, head, iconOn ? -28 : 0);
+      const tagOn = v.group.visible && !veiled && cs.fh < TAG_MAX_FH && v.data.sessionId !== selected && v !== sel && place(v.tag, head, iconOn ? -28 : 0);
       v.tag.style.display = tagOn ? 'flex' : 'none';
     }
     for (const l of labelItems) { if (veiled || cs.fh > l.maxFh || (l.born && builtK < 0.6)) l.el.style.display = 'none'; else if (place(l.el, l.pos)) l.el.style.display = 'block'; }
 
-    const sel = selected ? views.get(selected) : null;
     if (bubble) {
       if (sel) {
         proj.copy(sel.group.position).setY(sel.group.position.y + sel.iconY - 0.2).project(camera);

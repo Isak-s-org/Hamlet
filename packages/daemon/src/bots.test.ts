@@ -126,6 +126,28 @@ test("a subagent's request only clears on its own agent's events", () => {
   send("p3", "SessionEnd");
 });
 
+test("subagents show as helpers with their own activity and prompts", () => {
+  send("h1", "PreToolUse", { tool_name: "Agent", tool_input: { description: "Find the bug" }, tool_use_id: "u1" });
+  send("h1", "SubagentStart", { agent_id: "a", agent_type: "Explore" });
+  send("h1", "PreToolUse", { agent_id: "a", tool_name: "Grep", tool_input: { pattern: "bug" }, tool_use_id: "u2" });
+  // A subagent already running when the daemon started appears on its first event.
+  send("h1", "PreToolUse", { agent_id: "b", tool_name: "Read", tool_input: { file_path: "/x/a.ts" }, tool_use_id: "u3" });
+  assert.equal(bots.get("h1")!.activity, "Delegating: Find the bug");
+  assert.deepEqual(bots.get("h1")!.helpers, [
+    { agentId: "a", type: "Explore", activity: "Searching for bug" },
+    { agentId: "b", activity: "Reading a.ts" },
+  ]);
+  send("h1", "PostToolUse", { agent_id: "a", tool_use_id: "u2" });
+  assert.equal(bots.get("h1")!.helpers![0]!.activity, undefined);
+  askFor("h1", 20, "Bash", { command: "pnpm test" }, "b");
+  assert.equal(bots.get("h1")!.permission!.agentId, "b");
+  send("h1", "SubagentStop", { agent_id: "b" });
+  assert.equal(bots.get("h1")!.permission, undefined);
+  send("h1", "SubagentStop", { agent_id: "a" });
+  assert.equal(bots.get("h1")!.helpers, undefined);
+  send("h1", "SessionEnd");
+});
+
 test("describe names common tools", () => {
   assert.equal(describe("Bash", { command: "git status\ngit diff" }), "Running git status");
   assert.equal(describe("WebFetch", { url: "https://example.com/a" }), "Reading example.com");
