@@ -119,6 +119,8 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
   // AO needs a single-sampled depth prepass (GTAO gathers depth, which MSAA textures can't do). Normals are rebuilt from depth.
   const prePass = pass(scene, camera, { samples: 0 });
   prePass.transparent = false;
+  // AO itself runs at half resolution, so a full-size prepass (a second fully lit scene render) buys nothing.
+  prePass.setResolutionScale(0.5);
   const preDepth = prePass.getTextureNode('depth');
   const G = { sat: uniform(1.1), con: uniform(1.04), gain: uniform(new V(1, 1, 1)), lift: uniform(new V()), vig: uniform(0.3), ao: uniform(0) };
   const grade = Fn(([c]) => {
