@@ -69,6 +69,22 @@ export type ChatEntry = { uuid: string; at: string; parent?: string } & (
   | { kind: "notice"; text: string; level: "info" | "error" }
 );
 
+/** A subagent of the session, from its own transcript. `parent` is the Agent call that started it. */
+export interface Subagent {
+  agentId: string;
+  parent: string;
+  type?: string;
+  description?: string;
+  /** Tokens in its latest turn, input and cache included: the total Claude Code reports when it finishes. */
+  tokens: number;
+  tools: number;
+  /** Timestamps of its first and latest transcript lines. */
+  start?: string;
+  last?: string;
+  /** Its Agent call came back as an error. */
+  failed?: boolean;
+}
+
 /** One entry of the chat's "/" menu. */
 export interface Command {
   name: string;
@@ -77,7 +93,7 @@ export interface Command {
 
 /** One message of GET /api/sessions/:id/chat. */
 /** `queued`: messages typed while Claude works, oldest first, waiting for the turn to take them. */
-export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" } | { commands: Command[] } | { queued: string[] };
+export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" } | { commands: Command[] } | { queued: string[] } | { subagents: Subagent[] };
 
 /** Longest message POST /api/sessions/:id/send takes, in UTF-8 bytes. */
 export const SEND_CAP = 64 * 1024;

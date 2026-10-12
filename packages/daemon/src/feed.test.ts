@@ -11,7 +11,7 @@ const session = () => {
   const dir = mkdtempSync(join(tmpdir(), "hamlet-feed-"));
   return { dir, path: join(dir, "s1.jsonl") };
 };
-const kinds = (events: ChatEvent[]) => events.map((e) => ("entries" in e ? e.entries.length : "reset" in e ? "reset" : "commands" in e ? "commands" : "queued" in e ? "queued" : e.error));
+const kinds = (events: ChatEvent[]) => events.map((e) => ("entries" in e ? e.entries.length : "reset" in e ? "reset" : "commands" in e ? "commands" : "queued" in e ? "queued" : "subagents" in e ? "subagents" : e.error));
 
 test("a feed sends its backlog in batches, then what each poll appends", async () => {
   const { path } = session();
@@ -65,6 +65,29 @@ test("subagent entries arrive with their parent once the meta file exists", asyn
   writeFileSync(join(subs, "agent-x.meta.json"), JSON.stringify({ toolUseId: "toolu_P" }));
   await feed.poll();
   assert.deepEqual(feed.entries.map((e) => [e.kind, e.parent]), [["tool", undefined], ["prompt", "toolu_P"]]);
+});
+
+test("a feed sums up each subagent: type, tools, latest turn's tokens, times and failure", async () => {
+  const { dir, path } = session();
+  const subs = join(dir, "s1", "subagents");
+  mkdirSync(subs, { recursive: true });
+  writeFileSync(path, "");
+  writeFileSync(join(subs, "agent-x.meta.json"), JSON.stringify({ toolUseId: "toolu_P", agentType: "Explore", description: "Find it" }));
+  const turn = (id: string, at: string, block: object, usage: object) => JSON.stringify({ type: "assistant", uuid: `${id}${at}`, timestamp: at, message: { id, content: [block], usage } }) + "\n";
+  const usage = { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 8 };
+  // One turn split into two lines repeats its usage; the latest turn's count is the subagent's.
+  writeFileSync(join(subs, "agent-x.jsonl"), turn("m1", "t1", { type: "thinking", thinking: "hm" }, usage) + turn("m1", "t2", { type: "tool_use", id: "toolu_R", name: "Read", input: {} }, usage));
+  const feed = new ChatFeed(path);
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(events.at(-1), { subagents: [{ agentId: "x", parent: "toolu_P", type: "Explore", description: "Find it", tokens: 1110, tools: 1, start: "t1", last: "t2" }] });
+  appendFileSync(path, JSON.stringify({ type: "user", uuid: "r", timestamp: "t3", message: { content: [{ type: "tool_result", tool_use_id: "toolu_P", content: "boom", is_error: true }] } }) + "\n");
+  await feed.poll();
+  assert.equal((events.at(-1) as { subagents: { failed?: boolean }[] }).subagents[0]!.failed, true);
+  const late: ChatEvent[] = [];
+  feed.subscribe((e) => late.push(e));
+  assert.deepEqual(kinds(late), [3, "subagents"]);
 });
 
 test("a rewritten transcript resets the feed", async () => {

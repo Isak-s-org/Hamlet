@@ -1,6 +1,6 @@
 // Pure helpers for the chat view: what a tool card says, the HTML for text, diffs and results, and the composer's "/" menu.
 // Transcript content is untrusted, so every string goes through esc() before it becomes HTML.
-import { BUILTIN_COMMANDS, type Bot, type ChatEntry, type Command } from "@hamlet/shared/world";
+import { BUILTIN_COMMANDS, type Bot, type ChatEntry, type Command, type Helper, type Subagent } from "@hamlet/shared/world";
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -159,4 +159,26 @@ export function tailSplit(entries: ChatEntry[], n: number): { older: ChatEntry[]
     if (++seen === n) return { older: entries.slice(0, i), tail: entries.slice(i) };
   }
   return { older: [], tail: entries };
+}
+
+export function tokens(n: number): string {
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+export function elapsed(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** A row of the subagent list. `helper` is its villager while it runs; without one it is done. */
+export function subagentHtml(s: Subagent, helper: Helper | undefined, now: number): string {
+  const state = helper ? "running" : s.failed ? "failed" : "done";
+  const start = Date.parse(s.start ?? "");
+  const end = helper ? now : Date.parse(s.last ?? "");
+  const meta = [`${s.tools} tool${s.tools === 1 ? "" : "s"}`, s.tokens ? `${tokens(s.tokens)} tok` : "", start && end ? elapsed(end - start) : ""].filter(Boolean).join(" · ");
+  return `<span class="mark ${state}" title="${state}">${helper ? "●" : s.failed ? "✗" : "✓"}</span>
+    <span class="type">${esc(s.type ?? "Subagent")}</span><span class="meta">${esc(meta)}</span>
+    <span class="desc">${esc(s.description ?? "")}</span>${helper?.activity ? `<span class="act">${esc(helper.activity)}</span>` : ""}`;
 }

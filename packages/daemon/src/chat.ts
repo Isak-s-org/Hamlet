@@ -112,6 +112,18 @@ function convert(e: Line, parent?: string): ChatEntry[] {
   return out;
 }
 
+/** An assistant line's token count: its turn's input, cache and output. Each content block repeats its turn's usage. */
+export function tokensOf(line: string): number | undefined {
+  if (!line.includes('"usage"')) return undefined;
+  try {
+    const u = JSON.parse(line)?.message?.usage;
+    if (!u || typeof u !== "object") return undefined;
+    return ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"].reduce((n, k) => n + (Number(u[k]) || 0), 0);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Applies a `queue-operation` line to `queue`, Claude Code's input queue in order. A queued message
  * leaves it when its turn starts (dequeue) or when a running turn takes it in (remove). Returns

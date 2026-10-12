@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Bot, ChatEntry } from "@hamlet/shared/world";
-import { allCommands, bytes, diffHtml, esc, inputHtml, matchCommands, menuHtml, menuQuery, prose, resultHtml, Seen, sendBlock, setMarkdown, shortPath, tailSplit, textHtml, toolSummary } from "./chat-format.js";
+import { allCommands, bytes, subagentHtml, tokens, diffHtml, esc, inputHtml, matchCommands, menuHtml, menuQuery, prose, resultHtml, Seen, sendBlock, setMarkdown, shortPath, tailSplit, textHtml, toolSummary } from "./chat-format.js";
 
 const result = (o: Partial<Extract<ChatEntry, { kind: "result" }>>) =>
   ({ uuid: "r", at: "", kind: "result", toolUseId: "t", text: "", isError: false, ...o }) as Extract<ChatEntry, { kind: "result" }>;
@@ -143,4 +143,16 @@ test("the tail keeps the last n top-level entries, with what belongs to them", (
   assert.deepEqual(tail.map((x) => x.uuid), ["x1", "r1", "x2"]);
   assert.deepEqual(older.map((x) => x.uuid), ["p1", "t1", "s1"]);
   assert.deepEqual(tailSplit(list, 10), { older: [], tail: list });
+});
+
+test("a subagent row says its state, counts and time, running against now", () => {
+  const s = { agentId: "a", parent: "T", type: "Explore", description: "<b>x</b>", tokens: 45_210, tools: 1, start: "2026-01-01T00:00:00Z", last: "2026-01-01T00:01:03Z" };
+  const done = subagentHtml(s, undefined, 0);
+  assert.match(done, /✓/);
+  assert.match(done, /1 tool · 45\.2k tok · 1m 3s/);
+  assert.ok(!done.includes("<b>"));
+  const running = subagentHtml(s, { agentId: "a", activity: "Reading feed.ts" }, Date.parse("2026-01-01T00:00:05Z"));
+  assert.match(running, /●[\s\S]*5s[\s\S]*Reading feed\.ts/);
+  assert.match(subagentHtml({ ...s, failed: true }, undefined, 0), /✗/);
+  assert.equal(tokens(999), "999");
 });

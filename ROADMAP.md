@@ -28,6 +28,10 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
 - **Subagent helpers.** Each running subagent is a small villager that follows its bot, tagged with
   its type and what it's doing (`SubagentStart` / `SubagentStop`). A subagent's permission prompt
   shows over its helper.
+- **Subagent column.** Drag the chat sheet's left edge wider (900px or more) and every subagent of the
+  session is listed beside the chat: running ones first, with type, description, what it's doing, tool
+  count, tokens and duration. Clicking a row, or an Agent card's OPEN, shows its transcript there.
+  Narrower, its lines nest in the Agent card as before.
 
 ## Next
 
