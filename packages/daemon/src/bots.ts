@@ -225,6 +225,12 @@ export function track(
   return { bot, settled };
 }
 
+/** An interrupt sends no Stop hook: the session is idle once its terminal took the Esc. */
+export function interrupt(sessionId: string): void {
+  const bot = bots.get(sessionId);
+  if (bot) setState(bot, "idle");
+}
+
 /** Holds a request from `agent` (the hook's agent_id, unset for the main thread), tied to its tool call if one matches. */
 export function hold(sessionId: string, permission: PendingPermission, agent?: string): void {
   const input = JSON.stringify(permission.toolInput ?? {});

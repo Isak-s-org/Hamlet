@@ -3,7 +3,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatEntry, ChatEvent, Command } from "@hamlet/shared";
-import { commandsIn, toEntries } from "./chat.js";
+import { applyQueueOp, commandsIn, toEntries, typed } from "./chat.js";
 import { JsonlTail } from "./transcript.js";
 
 /** Entries per SSE message, so a long backlog renders progressively. */
@@ -21,6 +21,8 @@ export class ChatFeed {
   /** The session's "/" commands, from its transcript's skill listings. */
   private commands = new Map<string, Command>();
   private failed: "unreadable" | "no-transcript" | undefined;
+  /** Claude Code's input queue, notifications included; viewers get only what was typed. */
+  private queue: string[] = [];
 
   constructor(readonly path: string, private readonly onError: (e: unknown) => void = () => {}) {
     this.main = new JsonlTail(path, MAX_LINE);
@@ -34,6 +36,7 @@ export class ChatFeed {
   subscribe(listener: Listener): () => void {
     for (let i = 0; i < this.entries.length; i += BATCH) this.deliver(listener, { entries: this.entries.slice(i, i + BATCH) });
     if (this.commands.size) this.deliver(listener, { commands: [...this.commands.values()] });
+    if (this.queue.some(typed)) this.deliver(listener, { queued: this.queue.filter(typed) });
     if (this.failed) this.deliver(listener, { error: this.failed });
     this.listeners.add(listener);
     return () => this.unsubscribe(listener);
@@ -78,6 +81,7 @@ export class ChatFeed {
       this.entries.length = 0;
       this.subagents.clear();
       this.commands.clear();
+      this.queue = [];
       this.emit({ reset: true });
     }
     const fresh = read.lines.flatMap((line) => toEntries(line));
@@ -100,6 +104,9 @@ export class ChatFeed {
       listed = true;
     }
     if (listed) this.emit({ commands: [...this.commands.values()] });
+    let requeued = false;
+    for (const line of read.lines) requeued = applyQueueOp(line, this.queue) || requeued;
+    if (requeued) this.emit({ queued: this.queue.filter(typed) });
   }
 
   /** Subagents write <session>/subagents/agent-<id>.jsonl beside a meta file naming the call that started them. */

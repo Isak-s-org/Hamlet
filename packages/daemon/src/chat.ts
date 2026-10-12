@@ -24,7 +24,7 @@ function resultText(content: unknown): string {
 }
 
 /** Claude Code wraps commands, reminders and notifications in tags; only what the user typed is a prompt. */
-const typed = (t: unknown): t is string => typeof t === "string" && t.trim() !== "" && !t.trimStart().startsWith("<");
+export const typed = (t: unknown): t is string => typeof t === "string" && t.trim() !== "" && !t.trimStart().startsWith("<");
 const INTERRUPTED = /^\[Request interrupted by user/;
 /** CSI escape sequences, such as colors. */
 const ANSI = /\u001b\[[0-?]*[ -\/]*[@-~]/g;
@@ -110,6 +110,26 @@ function convert(e: Line, parent?: string): ChatEntry[] {
     if (n) out.push({ ...base(0), kind: "notice", ...n });
   }
   return out;
+}
+
+/**
+ * Applies a `queue-operation` line to `queue`, Claude Code's input queue in order. A queued message
+ * leaves it when its turn starts (dequeue) or when a running turn takes it in (remove). Returns
+ * whether the line changed the queue. Never throws.
+ */
+export function applyQueueOp(line: string, queue: string[]): boolean {
+  if (!line.includes('"queue-operation"')) return false;
+  try {
+    const e = JSON.parse(line);
+    if (e?.type !== "queue-operation") return false;
+    const content = typeof e.content === "string" ? e.content : "";
+    if (e.operation === "enqueue") return queue.push(content), true;
+    if (e.operation === "dequeue") return queue.shift() !== undefined;
+    const i = e.operation === "remove" ? queue.indexOf(content) : -1;
+    return i >= 0 && (queue.splice(i, 1), true);
+  } catch {
+    return false;
+  }
 }
 
 const DESCRIPTION_CAP = 200;

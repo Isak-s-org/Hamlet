@@ -1,5 +1,5 @@
 import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
-import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, setChatHooks, updateChat } from "./chat.js";
+import { chatOpen, chatSession, chatSurface, closeChat, jumpToEnd, openChat, setChatHooks, updateChat } from "./chat.js";
 import { esc, setMarkdown, shortPath } from "./chat-format.js";
 import { pop } from "./motion.js";
 import { nameAll } from "./names.js";
@@ -211,6 +211,13 @@ async function openTerminal(): Promise<void> {
   renderBubble(true);
 }
 
+async function newAgent(repo: string): Promise<void> {
+  const res = await fetch(`${API_PREFIX}/repos/${encodeURIComponent(repo)}/new`, { method: "POST" }).catch(() => undefined);
+  if (res?.ok) return;
+  const why = res ? ((await res.json().catch(() => ({}))) as { error?: string }).error ?? `daemon answered ${res.status}` : "daemon unreachable";
+  alert(`Could not start an agent in ${repo}: ${why}`);
+}
+
 function toggle(el: HTMLElement, open?: boolean): void {
   el.hidden = open === undefined ? !el.hidden : !open;
 }
@@ -286,7 +293,8 @@ function renderSidebar(): void {
         <span class="initial">${esc(repo.slice(0, 1).toUpperCase())}</span><span class="chev" aria-hidden="true">›</span>
         <span class="name">${esc(repo)}</span><span class="n mono soft"></span>
         <span class="badges"><span class="badge amber" title="Waiting">▲<b>0</b></span><span class="badge red" title="Errored">■<b>0</b></span></span>
-        </button><div class="agents"><ol></ol></div></li>`);
+        </button><button class="spawn" data-act="new-agent" data-arg="${esc(repo)}" title="New agent in ${esc(repo)}" aria-label="New agent in ${esc(repo)}">+</button>
+        <div class="agents"><ol></ol></div></li>`);
       repoEls.set(repo, li);
     }
     const open = !collapsed.has(repo);
@@ -297,6 +305,8 @@ function renderSidebar(): void {
     li.classList.toggle("err", errored > 0);
     li.querySelector(".city")!.setAttribute("aria-expanded", String(open));
     li.querySelector(".n")!.textContent = String(rb.length);
+    // A new agent's folder comes from a live session in the repo.
+    li.querySelector<HTMLButtonElement>(".spawn")!.hidden = !rb.length;
     setBadge(li.querySelector(".badge.amber")!, waiting);
     setBadge(li.querySelector(".badge.red")!, errored);
     rb.sort((a, b) => RANK[a.state] - RANK[b.state] || a.since - b.since);
@@ -333,7 +343,10 @@ function render(): void {
   const chatting = chatSession();
   if (chatting) {
     const b = bots.find((x) => x.sessionId === chatting);
-    updateChat(b, b ? nameOf(b) : chatting.slice(0, 6));
+    // /clear and /resume end the session and start the next one in the same terminal: the chat moves to it.
+    const next = b ? undefined : bots.find((x) => x.terminal?.kind === "cmux" && x.terminal.surfaceId === chatSurface());
+    if (next) openChat(next, nameOf(next), false);
+    else updateChat(b, b ? nameOf(b) : chatting.slice(0, 6));
   }
 }
 
@@ -473,6 +486,7 @@ app.addEventListener("click", (e) => {
     case "allow": case "deny": void answer(el.dataset.act); break;
     case "pick": pick(arg); break;
     case "terminal": void openTerminal(); break;
+    case "new-agent": void newAgent(arg); break;
     case "chat": openSelectedChat(); break;
     case "chat-close": closeChat(); break;
     case "chat-jump": jumpToEnd(); break;
