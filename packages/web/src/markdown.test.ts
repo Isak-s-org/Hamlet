@@ -23,3 +23,8 @@ test("Claude's usual markdown renders", () => {
   const html = mdHtml("## Plan\n\n- one\n  - nested\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```ts\nconst x = 1;\n```\n\nline one\nline two");
   for (const bit of ["<h2>", "<ul>", '<div class="table"><table>', '<pre class="code" data-lang="ts">', "const x = 1;", "line one<br>"]) assert.ok(html.includes(bit), bit);
 });
+
+test("file names in prose stay text; real URLs still link", () => {
+  for (const name of ["README.md", "install.sh", "main.py", "CLAUDE.md"]) assert.ok(!mdHtml(`see ${name}`).includes("<a"), name);
+  assert.match(mdHtml("see https://example.com/x"), /<a href="https:\/\/example\.com\/x"/);
+});

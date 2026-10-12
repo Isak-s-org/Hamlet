@@ -4,6 +4,8 @@
 import MarkdownIt from "markdown-it";
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
+// Only links with a scheme (or an email): "README.md" in a coding chat is a file, not a domain.
+md.linkify.set({ fuzzyLink: false });
 const rules = md.renderer.rules;
 const esc = md.utils.escapeHtml;
 

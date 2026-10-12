@@ -47,6 +47,7 @@ let backlogTimer: ReturnType<typeof setTimeout> | undefined;
 let slideTimer: ReturnType<typeof setTimeout> | undefined;
 let sliding = false;
 let scheduled = false;
+let frame = 0;
 let following = true;
 /** Off until the backlog is drawn: only entries that arrive after it animate in. */
 let live = false;
@@ -237,6 +238,8 @@ function reset(): void {
   queue = [];
   older = [];
   clearTimeout(backlogTimer);
+  // A frame asked for by the previous session would draw this one's backlog as live entries.
+  cancelAnimationFrame(frame);
   scheduled = false;
   live = false;
   // A cleared log starts pinned to the end again.
@@ -264,7 +267,7 @@ function receive(e: ChatEvent): void {
   for (const entry of seen.fresh(e.entries)) queue.push(entry);
   // The backlog arrives as several messages at once: wait for the last before drawing its tail.
   if (!live) clearTimeout(backlogTimer), (backlogTimer = setTimeout(drain, 30)), (scheduled = true);
-  else if (!scheduled) (scheduled = true), requestAnimationFrame(drain);
+  else if (!scheduled) (scheduled = true), (frame = requestAnimationFrame(drain));
 }
 
 function drain(): void {
@@ -275,7 +278,7 @@ function drain(): void {
   enter(batch.flatMap((entry) => place(entry)));
   if (following) log.scrollTop = log.scrollHeight;
   else if (batch.length) root.querySelector<HTMLElement>(".jump")!.hidden = false;
-  if (queue.length) (scheduled = true), requestAnimationFrame(drain);
+  if (queue.length) (scheduled = true), (frame = requestAnimationFrame(drain));
 }
 
 /** The backlog's last entries, all at once and pinned to the end; the rest waits in `older`. */
@@ -310,7 +313,14 @@ function drawOlder(): void {
   const split = tailSplit(older, TAIL);
   older = split.older;
   const box = document.createDocumentFragment();
+  // Subagent lines already waiting for a card in this stretch are newer than the stretch's own:
+  // they go in after it, not before.
+  const waiting = new Map(orphans);
+  orphans.clear();
   split.tail.forEach((entry) => place(entry, box));
+  for (const [parent, entries] of waiting)
+    if (cards.has(parent)) entries.forEach((entry) => place(entry));
+    else orphans.set(parent, [...(orphans.get(parent) ?? []), ...entries]);
   const height = log.scrollHeight;
   log.prepend(box);
   log.scrollTop += log.scrollHeight - height;
