@@ -481,7 +481,8 @@ export async function createWorld({ canvas, labels, bubble, options, callbacks }
     for (const v of views.values()) {
       const city = cities.get(v.data.repo), d = city?.districts.get(v.data.branch);
       if (!d) continue;
-      v.update(dt, t, city, d, slots.get(v.data.sessionId) ?? 0, camera);
+      // The selected bot holds still: a bubble that walks off is hard to read.
+      v.update(dt, t, city, d, slots.get(v.data.sessionId) ?? 0, camera, v.data.sessionId === selected);
       const newSmoke = smokes.find((s) => s.group.position.distanceToSquared(city.fire) < 0.01);
       v.group.visible = !(newSmoke?.born) || builtK > 0.8;
       const st = v.data.state, show = v.group.visible && ((st === 'needs_input' || st === 'errored') ? cs.fh < 400 : st === 'idle' && cs.fh < 60);

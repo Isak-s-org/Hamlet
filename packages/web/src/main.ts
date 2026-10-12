@@ -1,6 +1,6 @@
 import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
 import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, updateChat } from "./chat.js";
-import { esc } from "./chat-format.js";
+import { esc, shortPath } from "./chat-format.js";
 import { pop } from "./motion.js";
 import { nameAll } from "./names.js";
 import { createWorld, type World } from "./world/engine.js";
@@ -213,7 +213,8 @@ function toggle(el: HTMLElement, open?: boolean): void {
 }
 
 const RANK: Record<Bot["state"], number> = { needs_input: 0, errored: 1, working: 2, idle: 3 };
-const expanded = new Set<string>();
+/** Repos the user folded away; every other repo shows its sessions. */
+const collapsed = new Set<string>();
 const repoEls = new Map<string, HTMLLIElement>();
 const agentEls = new Map<string, HTMLLIElement>();
 const motion = matchMedia("(prefers-reduced-motion: no-preference)");
@@ -285,7 +286,7 @@ function renderSidebar(): void {
         </button><div class="agents"><ol></ol></div></li>`);
       repoEls.set(repo, li);
     }
-    const open = expanded.has(repo);
+    const open = !collapsed.has(repo);
     const waiting = rb.filter((b) => b.state === "needs_input").length;
     const errored = rb.filter((b) => b.state === "errored").length;
     li.classList.toggle("open", open);
@@ -303,7 +304,8 @@ function renderSidebar(): void {
 }
 
 function toggleRepo(repo: string): void {
-  if (!expanded.delete(repo)) expanded.add(repo), world?.flyToCity(repo);
+  if (collapsed.delete(repo)) world?.flyToCity(repo);
+  else collapsed.add(repo);
   render();
 }
 
@@ -332,6 +334,9 @@ function render(): void {
   }
 }
 
+/** A bubble row: a short label, and a value cut to the card's width with the whole of it on hover. */
+const kv = (k: string, value: string, full = value) => `<span class="kv"><span class="k">${k}</span><b title="${esc(full)}">${esc(value)}</b></span>`;
+
 let bubbleKey = "";
 function renderBubble(force = false): void {
   const b = selBot();
@@ -359,14 +364,14 @@ function renderBubble(force = false): void {
       p && questionsOf(p)
         ? questionsHtml(p, questionsOf(p)!)
         : p
-        ? `<span class="kv">TOOL  <b>${esc(p.toolName)}</b></span>
+        ? `${kv("TOOL", p.toolName)}
            <pre><span class="soft">${p.toolName === "Bash" ? "$ " : ""}</span>${esc(preview(p.toolName, p.toolInput))}</pre>
-           <span class="cwd">CWD   ${esc(p.cwd)}</span>
+           ${kv("CWD", shortPath(p.cwd), p.cwd)}
            <div class="actions">
              <button class="primary" data-act="allow">[A] ALLOW</button>
              <button class="outline" data-act="deny">[D] DENY</button>
            </div>`
-        : `${b.state === "working" ? `<span class="kv">NOW   <b>${esc(b.activity ?? "Thinking…")}</b></span>` : ""}<span class="cwd">CWD   ${esc(b.cwd)}</span>${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
+        : `${b.state === "working" ? kv("NOW", b.activity ?? "Thinking…") : ""}${kv("CWD", shortPath(b.cwd), b.cwd)}${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
     }<div class="actions"><button class="outline" data-act="chat" title="Read this session's conversation">[C] CHAT</button>${b.terminal ? `<button class="primary" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button>` : ""}</div>${error ? `<p class="error">${esc(error)}</p>` : ""}</div></div>`;
   if (changed) pop(bubble.querySelector<HTMLElement>(".pop")!);
 }
