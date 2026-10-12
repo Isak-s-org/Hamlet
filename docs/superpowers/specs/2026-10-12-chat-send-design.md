@@ -17,10 +17,11 @@ Builds on phase 1 (`2026-10-12-chat-view-design.md`).
 
 ## Decisions
 
-- **Injection:** the daemon shells out to the `cmux` CLI, as `focusTerminal` already does. It pastes
-  with `cmux rpc terminal.paste`, then presses Enter with `cmux send-key enter`. Plain `cmux send`
-  is not used for the text: it turns `\n` into Enter, which would split a message into several
-  prompts.
+- **Injection:** the daemon shells out to the `cmux` CLI, as `focusTerminal` already does, with a
+  single `cmux rpc terminal.paste` call whose `submit_key: "return"` presses Enter after the paste.
+  Checked on cmux 0.64.20: the text arrives as one bracketed paste with its newlines kept, ESC is
+  replaced with a space, and one `\r` follows. Plain `cmux send` is not used: it turns `\n` into
+  Enter, which would split a message into several prompts.
 - **Busy sessions:** sending while the bot is working is allowed. Claude Code queues text typed
   mid-turn, and the composer says so.
 - **Commands:** the session's own list comes from its transcript. Built-ins are not in the
@@ -54,9 +55,9 @@ Each main transcript has an `attachment` line with `attachment.type: "skill_list
 ```ts
 /** Text as it may reach the terminal, or why not. */
 export function cleanText(text: string): { text: string } | { error: "empty" | "too-long" };
-/** The cmux invocations that paste `text` into a surface and submit it. */
-export function sendArgs(t: CmuxTerminal, text: string): string[][];
-/** Pastes and submits `text`. One send at a time per surface. Rejects with cmux's stderr. */
+/** The cmux arguments that paste `text` into a surface and submit it. */
+export function pasteArgs(t: CmuxTerminal, text: string): string[];
+/** Pastes and submits `text`. Rejects with cmux's stderr. */
 export function sendText(t: CmuxTerminal, text: string): Promise<void>;
 ```
 
@@ -66,18 +67,10 @@ export function sendText(t: CmuxTerminal, text: string): Promise<void>;
     not reach the TUI.
   - Trims trailing whitespace.
   - Empty text is an error. So is text over `SEND_CAP` = 64 KB (UTF-8 bytes) after cleaning.
-- `sendArgs` builds two argument lists:
-  - `["rpc", "terminal.paste", JSON.stringify({ surface_id, workspace_id, text })]`
-  - `["send-key", "--workspace", id, "--surface", id, "enter"]`
-
-  The exact `terminal.paste` parameter names are confirmed in the plan's first task.
-- `sendText` runs them in order with `execFile` (never a shell), each with a 5 s timeout. Calls for
-  the same surface are chained, so two quick sends can't interleave their paste and Enter.
-
-**Fallback:** if `terminal.paste` turns out not to do a bracketed paste, the first task switches to
-`cmux send` for the text. In that case the composer rejects multi-line text ("Multi-line messages
-need cmux paste support"), and `cleanText` escapes whatever `cmux send` treats as escape
-sequences.
+- `pasteArgs` builds
+  `["rpc", "terminal.paste", JSON.stringify({ workspace_id, surface_id, text, submit_key: "return" })]`.
+- `sendText` runs it with `execFile` (never a shell) and a 5 s timeout. Paste and Enter are one
+  call, so two quick sends can't interleave.
 
 ### `chat.ts`: `commandsIn`
 
@@ -119,8 +112,7 @@ Body: `{ text: string }`. The token check already covers it.
 
 The target always comes from `bots.get(id).terminal`. The browser never names a surface.
 
-Fastify's body limit stays at its default (1 MB). That is above `SEND_CAP`, so 413 comes from
-`cleanText`.
+The daemon's body limit (20 MB) is far above `SEND_CAP`, so 413 comes from `cleanText`.
 
 ## Shared
 
@@ -204,7 +196,7 @@ SEND button, and a one-line status under them.
 - **`terminal.test.ts`:**
   - `cleanText`: ESC and other control characters are stripped, `\r\n` is normalized, trailing
     space is trimmed, empty and over-cap text are errors, and `\t` and `\n` survive.
-  - `sendArgs`: builds the exact argument lists.
+  - `pasteArgs`: builds the exact arguments.
 - **`chat.test.ts`:**
   - `commandsIn`: an initial listing, an addition, a name with no description line, and a
     description containing `: `.
@@ -215,7 +207,7 @@ SEND button, and a one-line status under them.
   - A subagent's listing is ignored.
 - **`server.test.ts`:** the test daemon's `PATH` starts with a temp directory holding a fake `cmux`
   script that appends its arguments to a file. The tests cover:
-  - 204, and the recorded paste then Enter;
+  - 204, and the recorded paste;
   - 409 with a held permission;
   - 422 for a session with no cmux headers;
   - 502 when the fake exits non-zero;
@@ -223,9 +215,7 @@ SEND button, and a one-line status under them.
 - **`chat-format.test.ts`:**
   - `matchCommands`: prefix before substring, case-insensitive, capped.
   - `allCommands`: the session's entry wins over a built-in with the same name.
-- **Manual (first plan task):** in a scratch cmux surface, confirm that `cmux rpc terminal.paste`
-  takes the expected parameters and delivers a three-line message to Claude Code as one prompt.
-  The fallback in this spec only applies if it doesn't.
+- **Manual:** send a three-line message and a `/` command to a real Claude Code session in cmux.
 
 ## Known limitations
 
