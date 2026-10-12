@@ -17,7 +17,8 @@ import {
   type Decision,
   type Question,
 } from "@hamlet/shared";
-import { bots, cwdOf, hold, release, retitle, sweep, track } from "./bots.js";
+import { bots, cwdOf, discover, hold, prune, release, retitle, sweep, track } from "./bots.js";
+import { findTranscript, liveSessions, terminalHeaders } from "./registry.js";
 import { forgetTranscript, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
@@ -140,6 +141,33 @@ function broadcast(): void {
 
 // shortcut: 6 h without any hook event counts as dead; a long-idle live session reappears on its next event.
 setInterval(() => sweep(6 * 3600_000) && broadcast(), 60_000).unref();
+
+/** Picks up sessions that were running before the daemon started or before the hooks were installed, and drops exited ones. */
+async function scanSessions(): Promise<void> {
+  const live = await liveSessions();
+  let changed = prune(new Set(live.map((s) => s.sessionId)));
+  for (const s of live) {
+    if (bots.has(s.sessionId)) continue;
+    const [place, headers] = await Promise.all([gitPlace(s.cwd), terminalHeaders(s.pid)]);
+    const bot = discover(s, headers, place);
+    if (!bot) continue;
+    changed = true;
+    const transcript = await findTranscript(s.sessionId);
+    if (transcript) readTitles(bot.sessionId, transcript);
+  }
+  if (changed) broadcast();
+}
+
+const SCAN_EVERY_MS = 10_000;
+async function scanLoop(): Promise<void> {
+  try {
+    await scanSessions();
+  } catch (e) {
+    log({ kind: "registry-error", error: String(e) });
+  }
+  setTimeout(scanLoop, SCAN_EVERY_MS).unref();
+}
+void scanLoop();
 
 async function focusTerminal(t: NonNullable<Bot["terminal"]>): Promise<void> {
   if (t.kind === "cmux") {
