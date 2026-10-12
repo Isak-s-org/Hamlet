@@ -14,12 +14,14 @@ import {
   loadOrCreateConfig,
   TOKEN_HEADER,
   type Bot,
+  type ChatEvent,
   type Decision,
   type Question,
 } from "@hamlet/shared";
 import { bots, cwdOf, discover, hold, prune, release, retitle, sweep, track } from "./bots.js";
 import { findTranscript, liveSessions, terminalHeaders } from "./registry.js";
-import { forgetTranscript, newTitles } from "./transcript.js";
+import { Feeds } from "./feed.js";
+import { forgetTranscript, isTranscriptPath, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
 type Answer = { behavior: Behavior; answers?: Record<string, string> };
@@ -110,6 +112,10 @@ function readTitles(sessionId: string, path: string): void {
   r.timer.unref();
 }
 
+/** Each session's transcript, from its hooks or the session registry. The chat view only ever reads these paths. */
+const transcripts = new Map<string, string>();
+const feeds = new Feeds((sessionId, error) => log({ kind: "chat-error", sessionId, error: String(error) }));
+
 const run = promisify(execFile);
 const gitCache = new Map<string, Promise<{ repo: string; branch: string }>>();
 
@@ -153,7 +159,10 @@ async function scanSessions(): Promise<void> {
     if (!bot) continue;
     changed = true;
     const transcript = await findTranscript(s.sessionId);
-    if (transcript) readTitles(bot.sessionId, transcript);
+    if (transcript) {
+      if (!transcripts.has(bot.sessionId)) transcripts.set(bot.sessionId, transcript);
+      readTitles(bot.sessionId, transcript);
+    }
   }
   if (changed) broadcast();
 }
@@ -197,12 +206,19 @@ app.post(HOOK_PATH, async (request, reply) => {
   const { bot, settled } = track(body, request.headers, await gitPlace(cwdOf(body)));
   for (const id of settled) pending.get(id)?.resolve("settled");
   broadcast();
-  const transcript = typeof body.transcript_path === "string" ? body.transcript_path : "";
+  const transcript = typeof body.transcript_path === "string" && isTranscriptPath(body.transcript_path) ? body.transcript_path : "";
   if (event === "SessionEnd") {
-    clearTimeout(titleReads.get(String(body.session_id))?.timer);
-    titleReads.delete(String(body.session_id));
+    const sessionId = String(body.session_id);
+    clearTimeout(titleReads.get(sessionId)?.timer);
+    titleReads.delete(sessionId);
+    transcripts.delete(sessionId);
+    feeds.drop(sessionId);
     if (transcript) forgetTranscript(transcript);
-  } else if (bot && transcript) readTitles(bot.sessionId, transcript);
+  } else if (bot && transcript) {
+    // Only the main thread's path is the session's transcript.
+    if (body.agent_id === undefined) transcripts.set(bot.sessionId, transcript);
+    readTitles(bot.sessionId, transcript);
+  }
   if (logBodies) {
     const headers = Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.startsWith("x-")));
     delete headers[TOKEN_HEADER];
@@ -259,6 +275,31 @@ app.get(`${API_PREFIX}/stream`, (request, reply) => {
   res.write(`data: ${JSON.stringify({ bots: [...bots.values()] })}\n\n`);
   streams.add(res);
   request.raw.on("close", () => streams.delete(res));
+});
+
+app.get(`${API_PREFIX}/sessions/:id/chat`, (request, reply) => {
+  const { id } = request.params as { id: string };
+  if (!bots.has(id)) return reply.code(404).send();
+  reply.hijack();
+  const res = reply.raw;
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = (e: ChatEvent) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+  let unsubscribe: (() => void) | undefined;
+  const attach = () => {
+    const path = transcripts.get(id);
+    if (path) unsubscribe = feeds.subscribe(id, path, send);
+    return !!path;
+  };
+  // A session can be known before any hook brought its transcript path; wait for one.
+  let wait: NodeJS.Timeout | undefined;
+  if (!attach()) {
+    send({ error: "no-transcript" });
+    wait = setInterval(() => attach() && clearInterval(wait), 1000);
+  }
+  request.raw.on("close", () => {
+    clearInterval(wait);
+    unsubscribe?.();
+  });
 });
 
 app.post(`${API_PREFIX}/decide`, async (request, reply) => {
