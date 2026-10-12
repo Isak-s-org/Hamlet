@@ -47,7 +47,7 @@ export function diffHtml(name: string, input: unknown): string | undefined {
     str(v) ? str(v).split("\n").map((l) => `<span class="${sign === "-" ? "del" : "add"}">${sign} ${esc(l)}</span>`) : [];
   const hunk = (e: Edit) => `<pre class="diff">${[...lines("-", e.old_string), ...lines("+", e.new_string)].join("")}</pre>`;
   if (name === "Edit") return hunk(i);
-  if (name === "MultiEdit" && Array.isArray(i.edits)) return (i.edits as Edit[]).map(hunk).join("");
+  if (name === "MultiEdit" && Array.isArray(i.edits)) return (i.edits as (Edit | null)[]).map((e) => hunk(e ?? {})).join("");
   if (name === "Write") return hunk({ new_string: i.content });
 }
 
