@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bots, describe, hold, promptTitle, release, retitle, sweep, track } from "./bots.js";
+import { bots, describe, discover, hold, promptTitle, prune, release, retitle, sweep, track } from "./bots.js";
 
 const place = { repo: "hamlet", branch: "main" };
 const send = (sessionId: string, hook_event_name: string, extra: Record<string, unknown> = {}) =>
@@ -131,4 +131,46 @@ test("describe names common tools", () => {
   assert.equal(describe("WebFetch", { url: "https://example.com/a" }), "Reading example.com");
   assert.equal(describe("mcp__github__create_issue"), "Using github");
   assert.equal(describe("Frobnicate"), "Using Frobnicate");
+});
+
+const SURFACE = "11111111-2222-3333-4444-555555555555";
+const live = (sessionId: string, status = "idle") => ({ pid: 1, sessionId, cwd: "/src/hamlet", status });
+
+test("a running session from the registry shows up before its first hook event", () => {
+  const bot = discover(live("r1"), { "x-cmux-surface-id": SURFACE, "x-cmux-workspace-id": SURFACE }, place)!;
+  assert.equal(bot.state, "idle");
+  assert.deepEqual(bot.terminal, { kind: "cmux", surfaceId: SURFACE, workspaceId: SURFACE });
+  assert.equal(discover(live("r2", "busy"), {}, place)!.state, "working");
+  assert.equal(discover(live("r3", "something-new"), {}, place)!.state, "needs_input");
+  // Hooks stay the source of truth for a session they already track.
+  send("r4", "UserPromptSubmit");
+  assert.equal(discover(live("r4", "idle"), {}, place), undefined);
+  assert.equal(bots.get("r4")!.state, "working");
+  for (const id of ["r1", "r2", "r3", "r4"]) send(id, "SessionEnd");
+});
+
+test("a registry session is dropped once its process is gone, hook-only sessions are not", () => {
+  send("r5", "UserPromptSubmit"); // never in the registry, e.g. an older Claude Code
+  prune(new Set(["r6"]));
+  discover(live("r6"), {}, place);
+  assert.equal(prune(new Set(["r6"])), false);
+  // Registry sessions have a live process to go by, so the idle sweep only drops the hook-only one.
+  sweep(1000, Date.now() + 2000);
+  assert.equal(bots.has("r6"), true);
+  assert.equal(bots.has("r5"), false);
+  send("r5", "UserPromptSubmit");
+  assert.equal(prune(new Set()), true);
+  assert.equal(bots.has("r6"), false);
+  assert.equal(bots.has("r5"), true);
+  send("r5", "SessionEnd");
+});
+
+test("an ended session isn't rediscovered while its registry file lingers", () => {
+  prune(new Set(["r7"]));
+  send("r7", "UserPromptSubmit");
+  send("r7", "SessionEnd");
+  assert.equal(discover(live("r7"), {}, place), undefined);
+  prune(new Set()); // file gone
+  assert.equal(discover(live("r7"), {}, place)?.sessionId, "r7"); // a resumed session with the same id
+  send("r7", "SessionEnd");
 });

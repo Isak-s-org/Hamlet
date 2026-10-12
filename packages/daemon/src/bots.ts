@@ -8,6 +8,10 @@ const held = new Map<number, PendingPermission & { sessionId: string; agent: str
 type Call = { agent: string; toolUseId: string; toolName: string; input: string };
 const calls = new Map<string, Call[]>();
 const MAX_CALLS = 100;
+/** Sessions seen in Claude Code's session registry; their process tells whether they're alive. */
+const registered = new Set<string>();
+/** Sessions that sent SessionEnd while their registry file may still linger. */
+const ended = new Set<string>();
 const lastSeen = new Map<string, number>();
 /** Where each bot's title came from; a better source replaces a worse one, never the other way. */
 const titleRank = new Map<string, number>();
@@ -164,7 +168,11 @@ export function track(
   const sessionId = String(body.session_id ?? "");
   if (!sessionId) return { settled: [] };
   const settled = settle(sessionId, event, body);
-  if (event === "SessionEnd") return forget(sessionId), { settled };
+  if (event === "SessionEnd") {
+    forget(sessionId);
+    if (registered.has(sessionId)) ended.add(sessionId);
+    return { settled };
+  }
   remember(sessionId, event, body);
   lastSeen.set(sessionId, Date.now());
   const cwd = cwdOf(body);
@@ -220,9 +228,43 @@ export function sweep(maxIdleMs: number, now = Date.now()): boolean {
   const waiting = new Set([...held.values()].map((h) => h.sessionId));
   let removed = false;
   for (const [id, at] of lastSeen) {
-    if (now - at < maxIdleMs || waiting.has(id)) continue;
+    if (now - at < maxIdleMs || waiting.has(id) || registered.has(id)) continue;
     forget(id);
     removed = true;
   }
+  return removed;
+}
+
+const REGISTRY_STATE: Record<string, BotState> = { busy: "working", idle: "idle" };
+
+/**
+ * Adds a running session from Claude Code's registry that hooks haven't told us about yet.
+ * `headers` are terminal ids shaped like the hook headers. Returns the bot if it's new.
+ */
+export function discover(
+  s: { sessionId: string; cwd: string; status: string },
+  headers: Record<string, unknown>,
+  place: { repo: string; branch: string },
+): Bot | undefined {
+  registered.add(s.sessionId);
+  if (bots.has(s.sessionId) || ended.has(s.sessionId)) return;
+  const bot: Bot = { sessionId: s.sessionId, cwd: s.cwd, ...place, state: REGISTRY_STATE[s.status] ?? "needs_input", since: Date.now() };
+  const terminal = terminalFrom(headers);
+  if (terminal) bot.terminal = terminal;
+  bots.set(s.sessionId, bot);
+  lastSeen.set(s.sessionId, Date.now());
+  return bot;
+}
+
+/** Drops registry sessions missing from `live` (their process exited). Returns whether a bot went. */
+export function prune(live: Set<string>): boolean {
+  let removed = false;
+  for (const id of registered) {
+    if (live.has(id)) continue;
+    registered.delete(id);
+    ended.delete(id);
+    if (bots.has(id)) forget(id), (removed = true);
+  }
+  for (const id of live) registered.add(id);
   return removed;
 }
