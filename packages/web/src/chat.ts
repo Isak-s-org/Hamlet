@@ -48,7 +48,8 @@ const drafts = new Map<string, string>();
 let commands: Command[] = [];
 /** The chat's bot as of the last update; undefined once its session has ended. */
 let current: Bot | undefined;
-let sending = false;
+/** The message on its way, and its session: the chat can close and reopen before cmux answers. */
+let inFlight: { id: string; text: string } | undefined;
 let menu: MenuCommand[] = [];
 let active = 0;
 let statusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +90,7 @@ export function openChat(bot: Bot, name: string): void {
   });
   const ta = textarea()!;
   ta.value = drafts.get(bot.sessionId) ?? "";
+  ta.readOnly = inFlight?.id === bot.sessionId;
   ta.addEventListener("input", () => {
     if (sessionId) drafts.set(sessionId, ta.value);
     grow();
@@ -343,7 +345,7 @@ function refreshComposer(): void {
   if (!ta) return;
   const block = sendBlock(current);
   ta.disabled = !!block?.readOnly;
-  root.querySelector<HTMLButtonElement>(".composer button")!.disabled = !!block || sending || !ta.value.trim();
+  root.querySelector<HTMLButtonElement>(".composer button")!.disabled = !!block || inFlight?.id === sessionId || !ta.value.trim();
   if (block) setStatus(block.reason, "sticky");
   else if (root.querySelector<HTMLElement>(".composer .status")?.dataset.kind === "sticky") setStatus("");
   if (ta.disabled && menu.length) closeMenu();
@@ -363,29 +365,34 @@ function setStatus(text: string, kind: "info" | "error" | "sticky" = "info", fad
 async function send(): Promise<void> {
   const ta = textarea();
   const id = sessionId;
-  if (!ta || !id || sending || sendBlock(current) || !ta.value.trim()) return;
+  if (!ta || !id || inFlight?.id === id || sendBlock(current) || !ta.value.trim()) return;
   if (new TextEncoder().encode(ta.value).length > SEND_CAP) return setStatus(TOO_LONG, "error");
+  const sent = { id, text: ta.value };
   const queued = current?.state === "working";
-  sending = ta.readOnly = true;
+  inFlight = sent;
+  ta.readOnly = true;
   refreshComposer();
   let status: [string, "info" | "error", boolean];
   try {
     const res = await fetch(`${API_PREFIX}/sessions/${encodeURIComponent(id)}/send`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: ta.value }),
+      body: JSON.stringify({ text: sent.text }),
     });
     if (res.ok) {
-      drafts.delete(id);
-      ta.value = "";
+      if (drafts.get(id) === sent.text) drafts.delete(id);
       status = [queued ? "Queued: Claude picks it up after the current step." : "Sent.", "info", true];
     } else status = [await failure(res), "error", false];
   } catch {
     status = ["Couldn't reach the daemon.", "error", false];
   }
-  sending = ta.readOnly = false;
-  // The chat may have closed, or moved to another session, while the request was out.
-  if (!ta.isConnected) return;
+  if (inFlight === sent) inFlight = undefined;
+  // The chat may have closed, or moved to another session, while the request was out. Reopened on
+  // this session, it has a new textarea that was filled from the draft: that one gets the outcome.
+  const now = textarea();
+  if (sessionId !== id || !now) return;
+  now.readOnly = false;
+  if (status[1] === "info" && now.value === sent.text) now.value = "";
   grow();
   setStatus(...status);
   refreshComposer();

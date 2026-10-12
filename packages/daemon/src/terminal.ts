@@ -25,6 +25,24 @@ export const pasteArgs = (t: CmuxTerminal, text: string): string[] => [
   JSON.stringify({ workspace_id: t.workspaceId, surface_id: t.surfaceId, text, submit_key: "return" }),
 ];
 
+/**
+ * Where a message for this bot goes, or the status that refuses it. A bot that is waiting counts
+ * as having a dialog open even with no request held (found waiting after a daemon restart, say):
+ * the paste's Enter would answer that dialog.
+ */
+export function target(bot: Bot | undefined): { terminal: CmuxTerminal } | { refuse: 404 | 409 | 422 } {
+  if (!bot) return { refuse: 404 };
+  if (bot.permission || bot.state === "needs_input") return { refuse: 409 };
+  if (bot.terminal?.kind !== "cmux") return { refuse: 422 };
+  return { terminal: bot.terminal };
+}
+
+/** What to tell the user about a failed cmux call. Its message holds the command line, and so the text: never shown. */
+export function cmuxError(e: { killed?: boolean; stderr?: string; message?: string }): string {
+  if (e.killed) return "cmux timed out; check the terminal before sending again";
+  return String(e.stderr ?? "").trim().split("\n")[0] || "cmux failed";
+}
+
 export async function sendText(t: CmuxTerminal, text: string): Promise<void> {
   await run("cmux", pasteArgs(t, text), { timeout: 5000 });
 }
