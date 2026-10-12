@@ -10,10 +10,10 @@ import {
   matchCommands,
   menuHtml,
   menuQuery,
+  prose,
   resultHtml,
   Seen,
   sendBlock,
-  textHtml,
   toolSummary,
   type MenuCommand,
 } from "./chat-format.js";
@@ -251,7 +251,7 @@ function element(entry: Exclude<ChatEntry, Result>): HTMLElement {
   if (entry.kind === "tool") return toolCard(entry);
   const el = document.createElement(entry.kind === "thinking" ? "details" : "div");
   if (entry.kind === "prompt") (el.className = "prompt"), (el.innerHTML = `<span class="caret">&gt;</span><p>${esc(entry.text)}</p>`);
-  else if (entry.kind === "text") (el.className = "reply"), (el.innerHTML = textHtml(entry.text));
+  else if (entry.kind === "text") (el.className = "reply"), (el.innerHTML = prose(entry.text));
   else if (entry.kind === "thinking") (el.className = "thinking"), (el.innerHTML = `<summary>Thinking</summary><div class="body"><p class="say">${esc(entry.text)}</p></div>`), disclose(el as HTMLDetailsElement);
   // Multi-line notices are command output (/context, /cost): keep its layout.
   else if (entry.text.includes("\n")) (el.className = `output ${entry.level}`), (el.innerHTML = `<pre>${esc(entry.text)}</pre>`);
@@ -301,7 +301,7 @@ function fillResult(toolUseId: string): void {
   if (!card || !r) return;
   card.el.dataset.state = r.isError ? "error" : "done";
   const slot = card.el.querySelector<HTMLElement>(".result")!;
-  if (card.el.open && !slot.innerHTML) slot.innerHTML = resultHtml(r);
+  if (card.el.open && !slot.innerHTML) slot.innerHTML = resultHtml(r, isAgent(card.tool.name));
 }
 
 const textarea = () => root.querySelector<HTMLTextAreaElement>(".composer textarea");

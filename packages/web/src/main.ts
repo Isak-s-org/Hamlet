@@ -1,6 +1,6 @@
 import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
 import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, updateChat } from "./chat.js";
-import { esc, shortPath } from "./chat-format.js";
+import { esc, setMarkdown, shortPath } from "./chat-format.js";
 import { pop } from "./motion.js";
 import { nameAll } from "./names.js";
 import { createWorld, type World } from "./world/engine.js";
@@ -671,3 +671,7 @@ try {
   console.error(e);
   progress(0, `Could not start the 3D view. ${(e as Error).message ?? e}`);
 }
+
+/** markdown-it is the chat's biggest piece: fetched when the page is idle, so it's ready before a chat opens. */
+export const loadMarkdown = () => import("./markdown.js").then((m) => setMarkdown(m.mdHtml));
+(window.requestIdleCallback ?? ((f: () => void) => setTimeout(f, 1000)))(() => void loadMarkdown());

@@ -342,6 +342,25 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .chat .notice::before, .chat .notice::after { content: ''; flex: 1; height: 1px; background: var(--i-line); }
 .chat .notice.error { color: var(--i-red-t); }
 .chat .output.error pre { color: var(--i-red-t); }
+.chat .md { display: flex; flex-direction: column; gap: 8px; line-height: 1.55; overflow-wrap: anywhere; }
+.chat .md > *, .chat .md li > p { margin: 0; }
+.chat .md h1, .chat .md h2, .chat .md h3, .chat .md h4 { margin: 6px 0 0; font: 600 15px 'Hanken Grotesk', system-ui, sans-serif; }
+.chat .md h1 { font-size: 18px; }
+.chat .md h2 { font-size: 16px; }
+.chat .md ul, .chat .md ol { padding-left: 22px; }
+.chat .md ul { list-style: disc; }
+.chat .md ol { list-style: decimal; }
+.chat .md li + li, .chat .md li > ul, .chat .md li > ol { margin-top: 3px; }
+.chat .md li::marker { color: var(--i-soft); }
+.chat .md blockquote { padding-left: 10px; border-left: 2px solid var(--i-line); color: var(--i-mid); }
+.chat .md code { font: 12px var(--mono); padding: 1px 4px; border-radius: 3px; background: var(--i-code); }
+.chat .md pre.code[data-lang]::before { content: attr(data-lang); display: block; margin-bottom: 4px; font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--i-soft); }
+.chat .md .table { overflow-x: auto; }
+.chat .md table { border-collapse: collapse; font-size: 13px; }
+.chat .md th, .chat .md td { padding: 4px 10px; border: 1px solid var(--i-line); text-align: left; }
+.chat .md th { font-weight: 600; background: var(--i-sel); }
+.chat .md hr { width: 100%; border: 0; border-top: 1px solid var(--i-line); }
+.chat .md a { color: var(--i-amber-t); }
 .chat .pane { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .chat .composer { position: relative; padding: 10px max(20px, calc(50% - 440px)) 8px; border-top: 1px solid var(--i-line); }
 .chat .composer .line { display: flex; gap: 8px; align-items: flex-end; }
