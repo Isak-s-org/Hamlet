@@ -54,12 +54,15 @@ function notice(e: Line): { text: string; level: "info" | "error" } | undefined 
 
 /** The chat entries in one transcript line. `parent` is set for a subagent's transcript: the call that started it. */
 export function toEntries(line: string, parent?: string): ChatEntry[] {
-  let e: Line;
+  // Never throws: a line that does would lose the rest of its poll's lines.
   try {
-    e = JSON.parse(line);
+    return convert(JSON.parse(line), parent);
   } catch {
     return [];
   }
+}
+
+function convert(e: Line, parent?: string): ChatEntry[] {
   if (!e || typeof e !== "object" || typeof e.uuid !== "string") return [];
   // Older Claude Code versions wrote subagent turns into the main transcript.
   if (!parent && e.isSidechain) return [];
@@ -69,7 +72,9 @@ export function toEntries(line: string, parent?: string): ChatEntry[] {
   if (e.type === "user" && !e.isMeta && !e.isCompactSummary) {
     const blocks: Line[] = typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : [];
     blocks.forEach((c, i) => {
+      // A fork's transcript repeats the result of the call that started it; the parent's card has the real one.
       if (c?.type === "tool_result") {
+        if (parent && c.tool_use_id === parent) return;
         const text = resultText(c.content);
         const cut = text.length > TEXT_CAP;
         out.push({
