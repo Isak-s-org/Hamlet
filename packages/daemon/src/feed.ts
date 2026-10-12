@@ -18,7 +18,7 @@ export class ChatFeed {
   private main: JsonlTail;
   private subagents = new Map<string, { tail: JsonlTail; parent: string }>();
   private listeners = new Set<Listener>();
-  private failed = false;
+  private failed: "unreadable" | "no-transcript" | undefined;
 
   constructor(readonly path: string, private readonly onError: (e: unknown) => void = () => {}) {
     this.main = new JsonlTail(path, MAX_LINE);
@@ -31,9 +31,13 @@ export class ChatFeed {
   /** Sends everything read so far, then each change. Returns the unsubscribe function. */
   subscribe(listener: Listener): () => void {
     for (let i = 0; i < this.entries.length; i += BATCH) this.deliver(listener, { entries: this.entries.slice(i, i + BATCH) });
-    if (this.failed) this.deliver(listener, { error: "unreadable" });
+    if (this.failed) this.deliver(listener, { error: this.failed });
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => this.unsubscribe(listener);
+  }
+
+  unsubscribe(listener: Listener): void {
+    this.listeners.delete(listener);
   }
 
   /** Removes and returns the listeners, so they can move to another feed for the same session. */
@@ -57,14 +61,16 @@ export class ChatFeed {
     try {
       read = await this.main.read();
     } catch (e) {
-      if (!this.failed) {
-        this.failed = true;
-        this.onError(e);
-        this.emit({ error: "unreadable" });
+      // A new session's transcript may not exist yet: that is waiting, not an error.
+      const state = (e as NodeJS.ErrnoException)?.code === "ENOENT" ? "no-transcript" : "unreadable";
+      if (this.failed !== state) {
+        this.failed = state;
+        if (state === "unreadable") this.onError(e);
+        this.emit({ error: state });
       }
       return;
     }
-    this.failed = false;
+    this.failed = undefined;
     if (read.reset) {
       this.entries.length = 0;
       this.subagents.clear();
@@ -134,7 +140,9 @@ export class Feeds {
       f.feed.adopt(moved);
     }
     if (!f) f = this.open(sessionId, path);
-    return f.feed.subscribe(listener);
+    f.feed.subscribe(listener);
+    // The feed can be replaced while the viewer is connected, so look it up when leaving.
+    return () => this.feeds.get(sessionId)?.feed.unsubscribe(listener);
   }
 
   drop(sessionId: string): void {

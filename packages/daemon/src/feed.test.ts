@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -62,8 +62,27 @@ test("a rewritten transcript resets the feed", async () => {
   assert.deepEqual(feed.entries.map((e) => e.uuid), ["p3:0"]);
 });
 
+test("a missing transcript waits once without an error, then entries flow", async () => {
+  const { path } = session();
+  const errors: unknown[] = [];
+  const feed = new ChatFeed(path, (e) => errors.push(e));
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  await feed.poll();
+  assert.deepEqual(kinds(events), ["no-transcript"]);
+  const late: ChatEvent[] = [];
+  feed.subscribe((e) => late.push(e));
+  assert.deepEqual(kinds(late), ["no-transcript"]);
+  assert.equal(errors.length, 0);
+  writeFileSync(path, prompt(1));
+  await feed.poll();
+  assert.deepEqual(kinds(events), ["no-transcript", 1]);
+});
+
 test("an unreadable transcript reports once and recovers", async () => {
   const { path } = session();
+  mkdirSync(path); // a directory at the path fails with EISDIR
   const errors: unknown[] = [];
   const feed = new ChatFeed(path, (e) => errors.push(e));
   const events: ChatEvent[] = [];
@@ -72,6 +91,7 @@ test("an unreadable transcript reports once and recovers", async () => {
   await feed.poll();
   assert.deepEqual(kinds(events), ["unreadable"]);
   assert.equal(errors.length, 1);
+  rmSync(path, { recursive: true });
   writeFileSync(path, prompt(1));
   await feed.poll();
   assert.deepEqual(kinds(events), ["unreadable", 1]);
@@ -110,14 +130,19 @@ test("a path change moves the viewers to the new feed", async () => {
   const two = session();
   writeFileSync(one.path, prompt(1));
   writeFileSync(two.path, prompt(2) + prompt(3));
-  const feeds = new Feeds(() => {}, 10, 1000);
+  const feeds = new Feeds(() => {}, 10, 100);
   const a: ChatEvent[] = [];
-  feeds.subscribe("s1", one.path, (e) => a.push(e));
+  const leaveA = feeds.subscribe("s1", one.path, (e) => a.push(e));
   await new Promise((r) => setTimeout(r, 40));
   const b: ChatEvent[] = [];
-  feeds.subscribe("s1", two.path, (e) => b.push(e));
+  const leaveB = feeds.subscribe("s1", two.path, (e) => b.push(e));
   await new Promise((r) => setTimeout(r, 40));
   assert.deepEqual(kinds(a), [1, "reset", 2]);
   assert.deepEqual(kinds(b), [2]);
   assert.equal(feeds.size, 1);
+  // Both viewers leave through the functions they were given, so the new feed must be dropped.
+  leaveA();
+  leaveB();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(feeds.size, 0);
 });
