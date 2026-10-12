@@ -57,5 +57,22 @@ export type ChatEntry = { uuid: string; at: string; parent?: string } & (
   | { kind: "notice"; text: string; level: "info" | "error" }
 );
 
+/** One entry of the chat's "/" menu. */
+export interface Command {
+  name: string;
+  description: string;
+}
+
 /** One message of GET /api/sessions/:id/chat. */
-export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" };
+export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" } | { commands: Command[] };
+
+/** Longest message POST /api/sessions/:id/send takes, in UTF-8 bytes. */
+export const SEND_CAP = 64 * 1024;
+
+/** Built-ins that run without a picker in the terminal. The transcript's listing doesn't have built-ins. */
+export const BUILTIN_COMMANDS: Command[] = [
+  { name: "clear", description: "Clear the conversation and start fresh" },
+  { name: "compact", description: "Summarize the conversation to free context; optional focus instructions" },
+  { name: "context", description: "Show how the context window is used" },
+  { name: "cost", description: "Show this session's cost and duration" },
+];

@@ -21,6 +21,7 @@ import {
 import { bots, cwdOf, discover, hold, prune, release, retitle, sweep, track } from "./bots.js";
 import { findTranscript, liveSessions, terminalHeaders } from "./registry.js";
 import { Feeds } from "./feed.js";
+import { focusTerminal } from "./terminal.js";
 import { forgetTranscript, isTranscriptPath, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
@@ -177,20 +178,6 @@ async function scanLoop(): Promise<void> {
   setTimeout(scanLoop, SCAN_EVERY_MS).unref();
 }
 void scanLoop();
-
-async function focusTerminal(t: NonNullable<Bot["terminal"]>): Promise<void> {
-  if (t.kind === "cmux") {
-    await run("cmux", ["focus-panel", "--panel", t.surfaceId, "--workspace", t.workspaceId]);
-    if (process.platform === "darwin") await run("open", ["-b", "com.cmuxterm.app"]);
-    return;
-  }
-  // shortcut: WT has no focus-tab-by-session API, so this only raises the window; upgrade if WT adds one.
-  await run("powershell", [
-    "-NoProfile",
-    "-Command",
-    "$p = Get-Process WindowsTerminal -ErrorAction Stop | Select-Object -First 1; (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null",
-  ]);
-}
 
 const app = Fastify({ bodyLimit: 20 * 1024 * 1024, requestTimeout: 0 });
 

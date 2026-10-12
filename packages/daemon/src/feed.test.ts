@@ -11,7 +11,7 @@ const session = () => {
   const dir = mkdtempSync(join(tmpdir(), "hamlet-feed-"));
   return { dir, path: join(dir, "s1.jsonl") };
 };
-const kinds = (events: ChatEvent[]) => events.map((e) => ("entries" in e ? e.entries.length : "reset" in e ? "reset" : e.error));
+const kinds = (events: ChatEvent[]) => events.map((e) => ("entries" in e ? e.entries.length : "reset" in e ? "reset" : "commands" in e ? "commands" : e.error));
 
 test("a feed sends its backlog in batches, then what each poll appends", async () => {
   const { path } = session();
