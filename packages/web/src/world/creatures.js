@@ -234,13 +234,14 @@ export class CreatureView {
     this.path.push(goal);
   }
 
-  update(dt, t, city, d, slot, camera) {
+  /** `held`: the bot is selected, so it keeps its place (and its pose) while its bubble is read. */
+  update(dt, t, city, d, slot, camera, held = false) {
     const st = this.data.state, key = `${st}:${d.branch}:${slot}`;
     if (key !== this.planned) { this.planned = key; this.plan(city, d, slot); this.pauseUntil = 0; }
     const speed = this.rig.kind === 'animal' ? 1.2 : 1.5;
     let walking = false;
     const next = this.path[0];
-    if (next && t >= this.pauseUntil) {
+    if (next && t >= this.pauseUntil && !held) {
       const dx = next.x - this.pos.x, dz = next.z - this.pos.z, dist = Math.hypot(dx, dz);
       if (dist < 0.05) {
         this.path.shift();

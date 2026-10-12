@@ -198,9 +198,9 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .bubble .repo { font: 600 17px 'Hanken Grotesk', system-ui, sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bubble .repo .branch { font-size: 12px; }
 .bubble .body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
-.kv { font: 12px var(--mono); color: var(--i-soft); white-space: pre; }
-.kv b { font-weight: 400; color: var(--i-ink); }
-.cwd { font: 11px var(--mono); color: var(--i-soft); overflow-wrap: anywhere; white-space: pre-wrap; }
+.kv { display: flex; gap: 12px; min-width: 0; font: 12px var(--mono); color: var(--i-soft); }
+.kv .k { flex: none; width: 4ch; }
+.kv b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--i-ink); }
 .bubble pre {
   margin: 0; max-height: 220px; overflow: auto; padding: 10px; border: 1px solid var(--i-line); border-radius: 3px;
   background: var(--i-code); color: var(--i-ink); font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word;

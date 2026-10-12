@@ -129,3 +129,14 @@ export function sendBlock(bot: Bot | undefined): { reason: string; readOnly: boo
   // Waiting with no request held still means a dialog may be open in the terminal.
   if (bot.permission || bot.state === "needs_input") return { reason: "Answer the WAITING prompt first.", readOnly: false };
 }
+
+/** A path that fits `max` characters: whole trailing folders after "…/", as the end is the part that tells sessions apart. */
+export function shortPath(path: string, max = 40): string {
+  if (path.length <= max) return path;
+  const parts = path.split("/");
+  let tail = parts.pop()!;
+  // parts[0] is the empty root of an absolute path; it never joins the tail.
+  while (parts.length > 1 && `…/${parts.at(-1)}/${tail}`.length <= max) tail = `${parts.pop()}/${tail}`;
+  const out = `…/${tail}`;
+  return out.length <= max ? out : `…${out.slice(out.length - max + 1)}`;
+}
