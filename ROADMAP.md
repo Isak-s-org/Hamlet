@@ -17,6 +17,9 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
   hooks were installed show up right away, and a bot leaves soon after its process exits.
 - **Notifications.** A sound, and optionally a desktop notification, when a bot starts waiting while
   the tab isn't focused. The tab title shows how many bots are waiting.
+- **Chat view (read-only).** `[C] CHAT` on a bot opens its conversation in a full-screen overlay:
+  prompts, replies, tool calls with inputs, results and diffs, subagent work, and notices, live
+  from the transcript.
 
 ## Next
 
@@ -24,9 +27,7 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
 
 Open a session's conversation from its bot.
 
-1. **Read-only:** the daemon tails the `transcript_path` sent with every hook and streams messages
-   and tool calls over the existing SSE stream. This works in every terminal.
-2. **Send messages:** type into the session from the app. To start, this injects text into the
+1. **Send messages:** type into the session from the app. To start, this injects text into the
    session's cmux surface. Windows Terminal, IDE and desktop-app sessions stay read-only, and the
    input box says why.
 
