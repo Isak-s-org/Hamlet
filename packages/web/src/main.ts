@@ -1,4 +1,5 @@
 import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
+import { esc } from "./chat-format.js";
 import { nameAll } from "./names.js";
 import { createWorld, type World } from "./world/engine.js";
 
@@ -37,7 +38,6 @@ function loadSettings(): Partial<Settings> {
   }
 }
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const pad = (n: number) => String(n).padStart(2, "0");
 
 function ago(ms: number): string {
