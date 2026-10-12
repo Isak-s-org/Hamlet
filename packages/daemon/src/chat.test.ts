@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { duration, TEXT_CAP, toEntries } from "./chat.js";
+import { commandsIn, duration, TEXT_CAP, toEntries } from "./chat.js";
 
 const AT = "2026-10-12T10:00:00.000Z";
 const line = (o: Record<string, unknown>) => JSON.stringify({ uuid: "u1", timestamp: AT, isSidechain: false, ...o });
@@ -116,4 +116,37 @@ test("a fork's copy of the starting call's result is skipped", () => {
   assert.deepEqual(toEntries(result("agent1"), "agent1"), []);
   assert.equal(toEntries(result("t9"), "agent1").length, 1);
   assert.equal(toEntries(result("agent1")).length, 1);
+});
+
+const listing = (names: unknown, content: string, isInitial = true) =>
+  JSON.stringify({ type: "attachment", uuid: "l1", timestamp: "t", attachment: { type: "skill_listing", isInitial, names, content, skillCount: 2 } });
+
+test("a skill listing gives each name with its description", () => {
+  const line = listing(["init", "code-review:code-review", "bare"], "- init: Initialize a new CLAUDE.md file\n- code-review:code-review: Review a PR: bugs, style\n");
+  assert.deepEqual(commandsIn(line), {
+    initial: true,
+    commands: [
+      { name: "init", description: "Initialize a new CLAUDE.md file" },
+      { name: "code-review:code-review", description: "Review a PR: bugs, style" },
+      { name: "bare", description: "" },
+    ],
+  });
+  assert.equal(commandsIn(listing(["x"], "- x: added", false))?.initial, false);
+});
+
+test("long descriptions are cut", () => {
+  const d = commandsIn(listing(["x"], `- x: ${"a".repeat(500)}`))!.commands[0]!.description;
+  assert.equal(d.length, 200);
+  assert.ok(d.endsWith("…"));
+});
+
+test("anything but a well-formed skill listing gives nothing", () => {
+  for (const line of [
+    JSON.stringify({ type: "user", uuid: "u", message: { content: "skill_listing" } }),
+    '{"type":"attachment","attachment":{"type":"skill_listing"',
+    listing("init", "- init: x"),
+    listing([1, 2], ""),
+    "",
+  ])
+    assert.equal(commandsIn(line), undefined, line);
 });

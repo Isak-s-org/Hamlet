@@ -2,8 +2,8 @@
 // chat on a session shares one feed, which keeps the entries so another viewer gets them at once.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChatEntry, ChatEvent } from "@hamlet/shared";
-import { toEntries } from "./chat.js";
+import type { ChatEntry, ChatEvent, Command } from "@hamlet/shared";
+import { commandsIn, toEntries } from "./chat.js";
 import { JsonlTail } from "./transcript.js";
 
 /** Entries per SSE message, so a long backlog renders progressively. */
@@ -18,6 +18,8 @@ export class ChatFeed {
   private main: JsonlTail;
   private subagents = new Map<string, { tail: JsonlTail; parent: string }>();
   private listeners = new Set<Listener>();
+  /** The session's "/" commands, from its transcript's skill listings. */
+  private commands = new Map<string, Command>();
   private failed: "unreadable" | "no-transcript" | undefined;
 
   constructor(readonly path: string, private readonly onError: (e: unknown) => void = () => {}) {
@@ -31,6 +33,7 @@ export class ChatFeed {
   /** Sends everything read so far, then each change. Returns the unsubscribe function. */
   subscribe(listener: Listener): () => void {
     for (let i = 0; i < this.entries.length; i += BATCH) this.deliver(listener, { entries: this.entries.slice(i, i + BATCH) });
+    if (this.commands.size) this.deliver(listener, { commands: [...this.commands.values()] });
     if (this.failed) this.deliver(listener, { error: this.failed });
     this.listeners.add(listener);
     return () => this.unsubscribe(listener);
@@ -74,6 +77,7 @@ export class ChatFeed {
     if (read.reset) {
       this.entries.length = 0;
       this.subagents.clear();
+      this.commands.clear();
       this.emit({ reset: true });
     }
     const fresh = read.lines.flatMap((line) => toEntries(line));
@@ -86,6 +90,16 @@ export class ChatFeed {
     }
     for (const entry of fresh) this.entries.push(entry);
     for (let i = 0; i < fresh.length; i += BATCH) this.emit({ entries: fresh.slice(i, i + BATCH) });
+    // Only the main transcript's listing is the session's; subagents get their own.
+    let listed = false;
+    for (const line of read.lines) {
+      const found = commandsIn(line);
+      if (!found) continue;
+      if (found.initial) this.commands.clear();
+      for (const c of found.commands) this.commands.set(c.name, c);
+      listed = true;
+    }
+    if (listed) this.emit({ commands: [...this.commands.values()] });
   }
 
   /** Subagents write <session>/subagents/agent-<id>.jsonl beside a meta file naming the call that started them. */
