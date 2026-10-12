@@ -46,11 +46,10 @@ These numbers are from opening the chat on a 240-entry session:
 
 ### Village beside the sheet
 
-- `World` gains `setInset(px: number): void`. The engine keeps the camera's projection centre in the middle of the visible area left of the sheet:
-  - It uses `camera.setViewOffset(vw + inset, vh, inset, 0, vw, vh)`.
-  - It sets the ortho bounds from the aspect `(vw + inset) / vh`, so the scale doesn't change.
+- `World` gains `setInset(px: number): void`. The engine keeps the camera's focus in the middle of the visible area left of the sheet:
+  - It shifts the orthographic frustum sideways: both `left` and `right` move by `shift = (inset / 2) * fh / vh` world units, so the scale doesn't change.
+  - `groundAt` adds the same shift, so panning and zooming under the cursor stay right. The raycaster and label placement use the camera, so they follow on their own.
   - The inset eases toward its target over about 300 ms in the engine's frame loop.
-  - At 0 it calls `clearViewOffset()`.
 - Labels and the bubble are placed through the same camera, so they follow.
 - `openChat` calls `world.setInset(sheetWidth)`. Closing calls `setInset(0)`. Below 720px the inset stays 0, since the sheet covers everything there.
 
