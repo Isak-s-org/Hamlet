@@ -25,13 +25,11 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
   multi-line messages arrive as one prompt, and a `/` menu lists the session's skills and commands
   plus `/clear`, `/compact`, `/context` and `/cost`. Sessions outside cmux stay read-only, and
   sending waits while a permission prompt is open.
+- **Subagent helpers.** Each running subagent is a small villager that follows its bot, tagged with
+  its type and what it's doing (`SubagentStart` / `SubagentStop`). A subagent's permission prompt
+  shows over its helper.
 
 ## Next
-
-### Subagent helpers
-
-Show subagents as small villagers that follow the main bot (`SubagentStart` / `SubagentStop`). A
-subagent's permission prompt shows on its helper.
 
 ### Easy install
 

@@ -6,6 +6,16 @@ export interface PendingPermission {
   toolName: string;
   toolInput: unknown;
   cwd: string;
+  /** The subagent asking, so the prompt shows on its helper. Unset for the main thread. */
+  agentId?: string;
+}
+
+/** A subagent the session is running, shown as a small villager following its bot. */
+export interface Helper {
+  agentId: string;
+  /** The subagent's type, such as "Explore". */
+  type?: string;
+  activity?: string;
 }
 
 export interface Bot {
@@ -21,6 +31,8 @@ export interface Bot {
   /** ms epoch of the last state change; the waiting tray sorts on it. */
   since: number;
   permission?: PendingPermission;
+  /** Subagents running now, from SubagentStart until SubagentStop. */
+  helpers?: Helper[];
   /** Where the session's terminal lives, from the hook headers. Absent when we can't focus it. */
   terminal?: { kind: "cmux"; surfaceId: string; workspaceId: string } | { kind: "wt"; session: string };
 }
