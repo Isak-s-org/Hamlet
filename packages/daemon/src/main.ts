@@ -21,7 +21,7 @@ import {
 import { bots, cwdOf, discover, hold, prune, release, retitle, sweep, track } from "./bots.js";
 import { findTranscript, liveSessions, terminalHeaders } from "./registry.js";
 import { Feeds } from "./feed.js";
-import { focusTerminal } from "./terminal.js";
+import { cleanText, focusTerminal, sendText } from "./terminal.js";
 import { forgetTranscript, isTranscriptPath, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
@@ -309,6 +309,27 @@ app.post(`${API_PREFIX}/terminal`, async (request, reply) => {
     const msg = String((e as { stderr?: string }).stderr || (e as Error).message).trim();
     return reply.code(502).send({ error: msg });
   }
+  return reply.code(204).send();
+});
+
+app.post(`${API_PREFIX}/sessions/:id/send`, async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const { text } = (request.body ?? {}) as { text?: unknown };
+  if (typeof text !== "string") return reply.code(400).send();
+  const clean = cleanText(text);
+  if ("error" in clean) return reply.code(clean.error === "empty" ? 400 : 413).send({ error: clean.error });
+  const bot = bots.get(id);
+  if (!bot) return reply.code(404).send();
+  // Typed text would land in the terminal's permission dialog.
+  if (bot.permission) return reply.code(409).send();
+  if (bot.terminal?.kind !== "cmux") return reply.code(422).send();
+  try {
+    await sendText(bot.terminal, clean.text);
+  } catch (e) {
+    const msg = String((e as { stderr?: string }).stderr || (e as Error).message).trim();
+    return reply.code(502).send({ error: msg });
+  }
+  log({ kind: "sent", sessionId: id, chars: clean.text.length });
   return reply.code(204).send();
 });
 
