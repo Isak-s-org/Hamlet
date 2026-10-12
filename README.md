@@ -41,8 +41,9 @@ Open the URL from the `web` pane, start a Claude Code session, and a bot appears
 - **Answer from the map.** Allow or deny a permission request without finding its terminal, or
   press `T` to jump to that terminal. Questions Claude asks with options (`AskUserQuestion`) show
   as buttons, with multi-select and "Other".
-- **Read a session's conversation.** Press `C` on a bot to open its chat: prompts, replies, tool
-  calls with their results and diffs, and subagent work, updated live from the transcript.
+- **Read a session's conversation.** Press `C` on a bot to open its chat in a sheet beside the
+  village: prompts, replies rendered as markdown, tool calls with their results and diffs, and
+  subagent work, updated live from the transcript. Pick another bot and the sheet follows.
 - **Reply from the chat.** Type into a session running in cmux without switching to its terminal.
   Multi-line messages arrive as one prompt, and `/` lists the session's skills and commands plus
   `/clear`, `/compact`, `/context` and `/cost`. Sending waits while a permission prompt is open.
