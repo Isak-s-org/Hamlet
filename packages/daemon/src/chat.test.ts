@@ -103,3 +103,17 @@ test("durations read like a clock", () => {
   assert.equal(duration(436_637), "7m 17s");
   assert.equal(duration(3_720_000), "1h 2m");
 });
+
+test("toEntries never throws, even on a pathologically deep tool input", () => {
+  // Built by hand: JSON.stringify itself overflows the stack on this.
+  const deep = `${"[".repeat(20_000)}"x"${"]".repeat(20_000)}`;
+  const out = toEntries(`{"uuid":"u1","type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"X","input":{"deep":${deep}}}]}}`);
+  assert.ok(Array.isArray(out));
+});
+
+test("a fork's copy of the starting call's result is skipped", () => {
+  const result = (id: string) => user([{ type: "tool_result", tool_use_id: id, content: "ok" }]);
+  assert.deepEqual(toEntries(result("agent1"), "agent1"), []);
+  assert.equal(toEntries(result("t9"), "agent1").length, 1);
+  assert.equal(toEntries(result("agent1")).length, 1);
+});
