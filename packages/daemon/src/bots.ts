@@ -3,7 +3,11 @@ import type { Bot, BotState, PendingPermission } from "@hamlet/shared";
 
 export const bots = new Map<string, Bot>();
 /** Held PermissionRequests by id. A session can hold several at once (parallel subagents). */
-const held = new Map<number, PendingPermission & { sessionId: string }>();
+const held = new Map<number, PendingPermission & { sessionId: string; agent: string; toolUseId?: string }>();
+/** Tool calls between PreToolUse and their result, per session. PermissionRequest has no tool_use_id, so a held request finds its call here. */
+type Call = { agent: string; toolUseId: string; toolName: string; input: string };
+const calls = new Map<string, Call[]>();
+const MAX_CALLS = 100;
 const lastSeen = new Map<string, number>();
 /** Where each bot's title came from; a better source replaces a worse one, never the other way. */
 const titleRank = new Map<string, number>();
@@ -81,6 +85,7 @@ function forget(sessionId: string): void {
   lastSeen.delete(sessionId);
   titleRank.delete(sessionId);
   activityOf.delete(sessionId);
+  calls.delete(sessionId);
 }
 
 function setState(bot: Bot, state: BotState): void {
@@ -100,12 +105,13 @@ function refresh(sessionId: string): void {
   if (!bot) return;
   const next = [...held.values()].find((h) => h.sessionId === sessionId);
   if (next) {
-    const { sessionId: _, ...permission } = next;
+    const { sessionId: _, agent: __, toolUseId: ___, ...permission } = next;
     bot.permission = permission;
     setState(bot, "needs_input");
   } else if (bot.permission) {
     delete bot.permission;
-    setState(bot, "working");
+    // A Stop that settled the request leaves the bot idle, not working.
+    if (bot.state === "needs_input") setState(bot, "working");
   }
 }
 
@@ -113,16 +119,53 @@ export function cwdOf(body: Record<string, any>): string {
   return String(body.cwd ?? bots.get(String(body.session_id ?? ""))?.cwd ?? "");
 }
 
-/** Applies one hook event. `place` is the git repo/branch of the event's cwd. */
+const agentOf = (body: Record<string, any>) => String(body.agent_id ?? "");
+/** Events after which the main agent can't still be showing a permission dialog. */
+const MAIN_MOVED_ON = new Set(["UserPromptSubmit", "Stop", "StopFailure"]);
+
+/**
+ * Drops the held requests this event shows were answered in the terminal and returns their ids.
+ * Claude Code runs the hook alongside its own dialog and keeps the hook open when the dialog wins.
+ * Its tool's result settles an allowed request; a denied one only shows in its agent moving on.
+ */
+function settle(sessionId: string, event: string, body: Record<string, any>): number[] {
+  const agent = agentOf(body);
+  const ran = (event === "PostToolUse" || event === "PostToolUseFailure") && body.tool_use_id;
+  const movedOn = agent
+    ? event === "SubagentStop"
+    : MAIN_MOVED_ON.has(event) || (event === "Notification" && body.notification_type === "idle_prompt");
+  const settled = [...held]
+    .filter(([, h]) => h.sessionId === sessionId && ((ran && h.toolUseId === body.tool_use_id) || (movedOn && h.agent === agent)))
+    .map(([id]) => id);
+  for (const id of settled) held.delete(id);
+  return settled;
+}
+
+function remember(sessionId: string, event: string, body: Record<string, any>): void {
+  const list = calls.get(sessionId) ?? [];
+  calls.set(sessionId, list);
+  const toolUseId = String(body.tool_use_id ?? "");
+  if (event === "PreToolUse" && toolUseId) {
+    list.push({ agent: agentOf(body), toolUseId, toolName: String(body.tool_name), input: JSON.stringify(body.tool_input ?? {}) });
+    if (list.length > MAX_CALLS) list.shift();
+  } else if (event === "PostToolUse" || event === "PostToolUseFailure") {
+    const i = list.findIndex((c) => c.toolUseId === toolUseId);
+    if (i >= 0) list.splice(i, 1);
+  }
+}
+
+/** Applies one hook event. `place` is the git repo/branch of the event's cwd. `settled` lists held requests it ended. */
 export function track(
   body: Record<string, any>,
   headers: Record<string, unknown>,
   place: { repo: string; branch: string },
-): Bot | undefined {
+): { bot?: Bot; settled: number[] } {
   const event = String(body.hook_event_name);
   const sessionId = String(body.session_id ?? "");
-  if (!sessionId) return;
-  if (event === "SessionEnd") return void forget(sessionId);
+  if (!sessionId) return { settled: [] };
+  const settled = settle(sessionId, event, body);
+  if (event === "SessionEnd") return forget(sessionId), { settled };
+  remember(sessionId, event, body);
   lastSeen.set(sessionId, Date.now());
   const cwd = cwdOf(body);
   // SessionStart can be missing (see SPIKE.md), so any event creates the bot.
@@ -151,11 +194,17 @@ export function track(
   }
   // A held request outranks whatever else the session is doing.
   refresh(sessionId);
-  return bot;
+  return { bot, settled };
 }
 
-export function hold(sessionId: string, permission: PendingPermission): void {
-  held.set(permission.id, { ...permission, sessionId });
+/** Holds a request from `agent` (the hook's agent_id, unset for the main thread), tied to its tool call if one matches. */
+export function hold(sessionId: string, permission: PendingPermission, agent?: string): void {
+  const input = JSON.stringify(permission.toolInput ?? {});
+  const linked = new Set([...held.values()].map((h) => h.toolUseId));
+  const call = (calls.get(sessionId) ?? []).findLast(
+    (c) => c.agent === (agent ?? "") && c.toolName === permission.toolName && c.input === input && !linked.has(c.toolUseId),
+  );
+  held.set(permission.id, { ...permission, sessionId, agent: agent ?? "", toolUseId: call?.toolUseId });
   refresh(sessionId);
 }
 

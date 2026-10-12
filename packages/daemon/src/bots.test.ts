@@ -82,6 +82,50 @@ test("activity follows the running tool and clears when the session stops", () =
   send("t2", "SessionEnd");
 });
 
+// Claude Code keeps the PermissionRequest hook open after its own dialog is answered, so later events must settle it.
+const question = { questions: [{ question: "Which?", header: "Pick", options: [{ label: "A" }], multiSelect: false }] };
+const askFor = (sessionId: string, id: number, toolName: string, toolInput: unknown, agent_id?: string) => {
+  send(sessionId, "PreToolUse", { tool_name: toolName, tool_input: toolInput, tool_use_id: `u${id}`, agent_id });
+  send(sessionId, "PermissionRequest", { tool_name: toolName, tool_input: toolInput, agent_id });
+  hold(sessionId, { id, toolName, toolInput, cwd: "/src/hamlet" }, agent_id);
+};
+
+test("a request answered in the terminal clears when its tool runs", () => {
+  askFor("p1", 10, "AskUserQuestion", question);
+  askFor("p1", 11, "Bash", { command: "ls" });
+  // The answers come back in tool_input, so only the tool_use_id ties the event to the request.
+  const { settled } = send("p1", "PostToolUse", { tool_name: "AskUserQuestion", tool_input: { ...question, answers: { "Which?": "A" } }, tool_use_id: "u10" });
+  assert.deepEqual(settled, [10]);
+  assert.equal(bots.get("p1")!.permission!.id, 11);
+  assert.deepEqual(send("p1", "PostToolUseFailure", { tool_name: "Bash", tool_use_id: "u11" }).settled, [11]);
+  assert.equal(bots.get("p1")!.permission, undefined);
+  assert.equal(bots.get("p1")!.state, "working");
+  send("p1", "SessionEnd");
+});
+
+test("a request denied in the terminal clears when the main turn ends", () => {
+  askFor("p2", 12, "Bash", { command: "rm -rf build" });
+  assert.deepEqual(send("p2", "Stop").settled, [12]);
+  assert.equal(bots.get("p2")!.permission, undefined);
+  assert.equal(bots.get("p2")!.state, "idle");
+  askFor("p2", 13, "Bash", { command: "rm -rf build" });
+  assert.deepEqual(send("p2", "Notification", { notification_type: "idle_prompt" }).settled, [13]);
+  askFor("p2", 14, "Bash", { command: "rm -rf build" });
+  assert.deepEqual(send("p2", "UserPromptSubmit", { prompt: "no, keep build" }).settled, [14]);
+  send("p2", "SessionEnd");
+});
+
+test("a subagent's request only clears on its own agent's events", () => {
+  askFor("p3", 15, "Bash", { command: "pnpm test" }, "a");
+  assert.deepEqual(send("p3", "Stop").settled, []);
+  assert.deepEqual(send("p3", "SubagentStop", { agent_id: "b" }).settled, []);
+  assert.deepEqual(send("p3", "PostToolUse", { tool_name: "Bash", tool_use_id: "other" }).settled, []);
+  assert.equal(bots.get("p3")!.permission!.id, 15);
+  assert.deepEqual(send("p3", "SubagentStop", { agent_id: "a" }).settled, [15]);
+  assert.equal(bots.get("p3")!.permission, undefined);
+  send("p3", "SessionEnd");
+});
+
 test("describe names common tools", () => {
   assert.equal(describe("Bash", { command: "git status\ngit diff" }), "Running git status");
   assert.equal(describe("WebFetch", { url: "https://example.com/a" }), "Reading example.com");

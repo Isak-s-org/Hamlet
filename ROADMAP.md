@@ -9,6 +9,9 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
 - **Answer `AskUserQuestion` from the village.** Options show as buttons, with multi-select and "Other".
   Answers go back to Claude Code as `updatedInput.answers` on the held `PermissionRequest`.
 - **Thought bubbles.** A name tag above each bot shows what it's doing, such as "Editing bots.ts".
+- **Answer in either place.** Claude Code shows its own prompt while the hook is held, and the first
+  answer wins. It keeps the hook open when the terminal answers, so the daemon clears the request
+  when the tool's result arrives or the agent moves on (next prompt, `Stop`, idle).
 - **Notifications.** A sound, and optionally a desktop notification, when a bot starts waiting while
   the tab isn't focused. The tab title shows how many bots are waiting.
 
@@ -45,7 +48,5 @@ subagent's permission prompt shows on its helper.
 
 ## Open questions
 
-- Does Claude Code still show its own prompt for `AskUserQuestion` while the hook is held? Does the
-  first answer win?
 - `ExitPlanMode` also needs `updatedInput` to be approved from a hook; Allow alone may not be enough.
 - Can we read transcripts for desktop-app and IDE sessions the same way?
