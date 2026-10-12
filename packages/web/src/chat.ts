@@ -15,6 +15,7 @@ import {
   resultHtml,
   Seen,
   sendBlock,
+  tailSplit,
   toolSummary,
   type MenuCommand,
 } from "./chat-format.js";
@@ -26,6 +27,8 @@ type Result = Extract<ChatEntry, { kind: "result" }>;
 const root = document.querySelector<HTMLElement>(".chat")!;
 /** Entries handled per animation frame, so a long backlog never freezes the tab. */
 const PER_FRAME = 200;
+/** Top-level entries drawn when a chat opens, and per step when scrolling back. */
+const TAIL = 150;
 
 let source: EventSource | undefined;
 let retry: ReturnType<typeof setTimeout> | undefined;
@@ -37,11 +40,17 @@ const results = new Map<string, Result>();
 /** Subagent entries whose Agent card isn't on screen yet. */
 const orphans = new Map<string, ChatEntry[]>();
 let queue: ChatEntry[] = [];
+/** The backlog above what's drawn, oldest first; scrolling near the top draws more of it. */
+let older: ChatEntry[] = [];
+let backlogTimer: ReturnType<typeof setTimeout> | undefined;
+/** The sheet waits for its first entries before sliding in, so it arrives filled. */
+let slideTimer: ReturnType<typeof setTimeout> | undefined;
+let sliding = false;
 let scheduled = false;
 let following = true;
-/** Off while the backlog shows: only entries placed after the queue first drains animate in. */
+/** Off until the backlog is drawn: only entries that arrive after it animate in. */
 let live = false;
-/** The chat is shrinking away: its stream is already shut, and it counts as closed. */
+/** The sheet is sliding away: its stream is already shut, and it counts as closed. */
 let closing = false;
 /** Unsent text per session, so closing the chat to answer a prompt keeps it. */
 const drafts = new Map<string, string>();
@@ -74,6 +83,7 @@ export function openChat(bot: Bot, name: string, focus = true): void {
   if (chatOpen() && sessionId === bot.sessionId) return updateChat(bot, name);
   // Mid-slide-out the sheet still has its DOM: it turns around instead of being rebuilt.
   const arriving = root.hidden || closing;
+  const closingBefore = closing;
   if (root.hidden) build();
   closing = root.inert = false;
   root.hidden = false;
@@ -83,7 +93,12 @@ export function openChat(bot: Bot, name: string, focus = true): void {
   hooks.inset(sheetWidth());
   const ta = textarea()!;
   if (focus || arriving) (ta.disabled ? log! : ta).focus();
-  if (arriving) void slideIn(root);
+  if (!arriving) return;
+  // Mid-slide-out it turns around at once; otherwise it waits off-screen for its entries, briefly.
+  if (closingBefore) return void slideIn(root);
+  root.style.transform = "translateX(100%)";
+  sliding = true;
+  slideTimer = setTimeout(arrive, 150);
 }
 
 /** The sheet's DOM and its listeners, built once per opening. */
@@ -108,7 +123,9 @@ function build(): void {
       <p class="status" aria-live="polite"></p>
     </form>`;
   const el = root.querySelector<HTMLElement>(".log")!;
+  for (const type of ["wheel", "pointerdown", "keydown", "touchstart"]) el.addEventListener(type, () => (touched = true), { passive: true });
   el.addEventListener("scroll", () => {
+    if (el.scrollTop < 400) drawOlder();
     following = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     if (following) root.querySelector<HTMLElement>(".jump")!.hidden = true;
   });
@@ -165,6 +182,8 @@ export function closeChat(): void {
   disconnect();
   // Shut at once, but stays on screen (and lets clicks through) until it has slid away.
   closing = root.inert = true;
+  sliding = false;
+  clearTimeout(slideTimer);
   root.parentElement!.classList.remove("sheet");
   hooks.inset(0);
   void slideOut(root).then((done) => {
@@ -216,6 +235,9 @@ function reset(): void {
   commands = [];
   closeMenu();
   queue = [];
+  older = [];
+  clearTimeout(backlogTimer);
+  scheduled = false;
   live = false;
   // A cleared log starts pinned to the end again.
   following = true;
@@ -240,24 +262,69 @@ function receive(e: ChatEvent): void {
     return showNote(e.error === "no-transcript" ? "Waiting for this session's transcript…" : "Couldn't read this session's transcript. The daemon log has the error.");
   showNote("");
   for (const entry of seen.fresh(e.entries)) queue.push(entry);
-  if (!scheduled) (scheduled = true), requestAnimationFrame(drain);
+  // The backlog arrives as several messages at once: wait for the last before drawing its tail.
+  if (!live) clearTimeout(backlogTimer), (backlogTimer = setTimeout(drain, 30)), (scheduled = true);
+  else if (!scheduled) (scheduled = true), requestAnimationFrame(drain);
 }
 
 function drain(): void {
   scheduled = false;
   if (!log) return;
+  if (!live) return drawBacklog();
   const batch = queue.splice(0, PER_FRAME);
-  const placed = batch.flatMap(place);
-  // The backlog appears as it is, so even a huge session opens at once.
-  if (live) enter(placed);
+  enter(batch.flatMap((entry) => place(entry)));
   if (following) log.scrollTop = log.scrollHeight;
   else if (batch.length) root.querySelector<HTMLElement>(".jump")!.hidden = false;
   if (queue.length) (scheduled = true), requestAnimationFrame(drain);
-  else live = true;
+}
+
+/** The backlog's last entries, all at once and pinned to the end; the rest waits in `older`. */
+function drawBacklog(): void {
+  const split = tailSplit(queue, TAIL);
+  older = split.older;
+  queue = [];
+  split.tail.forEach((entry) => place(entry));
+  live = true;
+  touched = false;
+  settle();
+  // A short tail leaves nothing to scroll, and so nothing to ask for more.
+  while (older.length && log!.scrollHeight <= log!.clientHeight) drawOlder();
+  if (sliding) requestAnimationFrame(arrive);
+}
+
+/**
+ * Entries off screen are laid out at an estimated height (content-visibility), so the end moves as
+ * the ones near it render for real. Stay on it for a moment, unless the reader takes over: the
+ * scroll events of these jumps arrive after the growth, so they can't tell.
+ */
+let touched = false;
+function settle(frames = 30): void {
+  if (!log || touched || !frames) return;
+  jumpToEnd();
+  requestAnimationFrame(() => settle(frames - 1));
+}
+
+/** Draws the next stretch of the backlog above the log without moving what's on screen. */
+function drawOlder(): void {
+  if (!log || !older.length) return;
+  const split = tailSplit(older, TAIL);
+  older = split.older;
+  const box = document.createDocumentFragment();
+  split.tail.forEach((entry) => place(entry, box));
+  const height = log.scrollHeight;
+  log.prepend(box);
+  log.scrollTop += log.scrollHeight - height;
+}
+
+function arrive(): void {
+  clearTimeout(slideTimer);
+  if (!sliding) return;
+  sliding = false;
+  void slideIn(root);
 }
 
 /** Puts an entry on screen and returns the elements it added; a result only fills its card. */
-function place(entry: ChatEntry): HTMLElement[] {
+function place(entry: ChatEntry, into: ParentNode = log!): HTMLElement[] {
   if (entry.kind === "result") {
     results.set(entry.toolUseId, entry);
     fillResult(entry.toolUseId);
@@ -266,9 +333,9 @@ function place(entry: ChatEntry): HTMLElement[] {
   const parent = entry.parent ? cards.get(entry.parent) : undefined;
   if (entry.parent && !parent) return orphans.set(entry.parent, [...(orphans.get(entry.parent) ?? []), entry]), [];
   const el = element(entry);
-  (parent?.el.querySelector<HTMLElement>(".sub") ?? log!).append(el);
+  (parent?.el.querySelector<HTMLElement>(".sub") ?? into).append(el);
   if (entry.kind !== "tool") return [el];
-  const placed = [el, ...(orphans.get(entry.id) ?? []).flatMap(place)];
+  const placed = [el, ...(orphans.get(entry.id) ?? []).flatMap((o) => place(o))];
   orphans.delete(entry.id);
   fillResult(entry.id);
   return placed;

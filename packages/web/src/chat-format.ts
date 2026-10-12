@@ -149,3 +149,14 @@ export function shortPath(path: string, max = 40): string {
   const out = `…/${tail}`;
   return out.length <= max ? out : `…${out.slice(out.length - max + 1)}`;
 }
+
+/** Splits a backlog so only its last `n` top-level entries are drawn at first; subagent lines and results ride with them. */
+export function tailSplit(entries: ChatEntry[], n: number): { older: ChatEntry[]; tail: ChatEntry[] } {
+  let seen = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (e.parent || e.kind === "result") continue;
+    if (++seen === n) return { older: entries.slice(0, i), tail: entries.slice(i) };
+  }
+  return { older: [], tail: entries };
+}

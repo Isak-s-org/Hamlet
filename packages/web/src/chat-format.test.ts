@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Bot, ChatEntry } from "@hamlet/shared/world";
-import { allCommands, bytes, diffHtml, esc, inputHtml, matchCommands, menuHtml, menuQuery, prose, resultHtml, Seen, sendBlock, setMarkdown, shortPath, textHtml, toolSummary } from "./chat-format.js";
+import { allCommands, bytes, diffHtml, esc, inputHtml, matchCommands, menuHtml, menuQuery, prose, resultHtml, Seen, sendBlock, setMarkdown, shortPath, tailSplit, textHtml, toolSummary } from "./chat-format.js";
 
 const result = (o: Partial<Extract<ChatEntry, { kind: "result" }>>) =>
   ({ uuid: "r", at: "", kind: "result", toolUseId: "t", text: "", isError: false, ...o }) as Extract<ChatEntry, { kind: "result" }>;
@@ -124,4 +124,20 @@ test("prose is plain until markdown has loaded, then markdown; agent reports and
   } finally {
     setMarkdown(undefined);
   }
+});
+
+test("the tail keeps the last n top-level entries, with what belongs to them", () => {
+  const e = (uuid: string, o: object) => ({ uuid, at: "", ...o }) as ChatEntry;
+  const list = [
+    e("p1", { kind: "prompt", text: "a" }),
+    e("t1", { kind: "tool", id: "T1", name: "Agent", input: {} }),
+    e("s1", { kind: "text", text: "sub", parent: "T1" }),
+    e("x1", { kind: "text", text: "b" }),
+    e("r1", { kind: "result", toolUseId: "T1", text: "", isError: false }),
+    e("x2", { kind: "text", text: "c" }),
+  ];
+  const { older, tail } = tailSplit(list, 2);
+  assert.deepEqual(tail.map((x) => x.uuid), ["x1", "r1", "x2"]);
+  assert.deepEqual(older.map((x) => x.uuid), ["p1", "t1", "s1"]);
+  assert.deepEqual(tailSplit(list, 10), { older: [], tail: list });
 });
