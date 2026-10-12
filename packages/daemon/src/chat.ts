@@ -26,6 +26,8 @@ function resultText(content: unknown): string {
 /** Claude Code wraps commands, reminders and notifications in tags; only what the user typed is a prompt. */
 const typed = (t: unknown): t is string => typeof t === "string" && t.trim() !== "" && !t.trimStart().startsWith("<");
 const INTERRUPTED = /^\[Request interrupted by user/;
+/** CSI escape sequences, such as colors. */
+const ANSI = /\u001b\[[0-?]*[ -\/]*[@-~]/g;
 
 export function duration(ms: number): string {
   const s = Math.round(ms / 1000);
@@ -41,7 +43,15 @@ function notice(e: Line): { text: string; level: "info" | "error" } | undefined 
     case "informational":
       return typeof e.content === "string" && e.content ? { text: e.content, level: "info" } : undefined;
     case "local_command": {
-      const text = String(e.content ?? "").replace(/<[^>]+>/g, "").trim();
+      const content = String(e.content ?? "");
+      // The line that records the command itself: show it as typed, not its tags.
+      const name = /<command-name>([^<]*)<\/command-name>/.exec(content)?.[1];
+      if (name) {
+        const args = /<command-args>([^<]*)<\/command-args>/.exec(content)?.[1] ?? "";
+        return { text: `${name} ${args}`.trim(), level: "info" };
+      }
+      // Command output keeps the terminal's colors (/context, /cost); the chat shows plain text.
+      const text = content.replace(/<[^>]+>/g, "").replace(ANSI, "").trim();
       return text ? { text, level: "info" } : undefined;
     }
     case "turn_duration":

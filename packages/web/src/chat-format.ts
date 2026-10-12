@@ -91,14 +91,19 @@ export function menuQuery(text: string): string | undefined {
   return /^\/(\S*)$/.exec(text)?.[1];
 }
 
-/** Name prefix matches first, also counting the part after a plugin's "plugin:" prefix, then other matches; each group A–Z. */
+/** Names that start with the query first, then those whose part after a "plugin:" prefix does, then other matches; each group A–Z. */
 export function matchCommands(query: string, list: MenuCommand[]): MenuCommand[] {
   const q = query.toLowerCase();
-  const starts = (c: MenuCommand) => c.name.toLowerCase().startsWith(q) || c.name.toLowerCase().split(":").at(-1)!.startsWith(q);
-  const byName = (a: MenuCommand, b: MenuCommand) => a.name.localeCompare(b.name);
-  const first = list.filter(starts).sort(byName);
-  const rest = list.filter((c) => !starts(c) && c.name.toLowerCase().includes(q)).sort(byName);
-  return [...first, ...rest].slice(0, MENU_MAX);
+  const rank = (c: MenuCommand) => {
+    const name = c.name.toLowerCase();
+    return name.startsWith(q) ? 0 : name.split(":").at(-1)!.startsWith(q) ? 1 : name.includes(q) ? 2 : 3;
+  };
+  return list
+    .map((c) => ({ c, r: rank(c) }))
+    .filter((m) => m.r < 3)
+    .sort((a, b) => a.r - b.r || a.c.name.localeCompare(b.c.name))
+    .slice(0, MENU_MAX)
+    .map((m) => m.c);
 }
 
 /** The session's commands plus the built-ins the transcript doesn't list. */

@@ -77,6 +77,8 @@ test("prefix matches come first, including after a plugin prefix", () => {
   const list = [cmd("simplify"), cmd("superpowers:brainstorming"), cmd("init"), cmd("brain-dump"), cmd("rebrain")];
   assert.deepEqual(matchCommands("brain", list).map((c) => c.name), ["brain-dump", "superpowers:brainstorming", "rebrain"]);
   assert.deepEqual(matchCommands("SIM", list).map((c) => c.name), ["simplify"]);
+  const co = [cmd("chrome-devtools-mcp:cookie-debugging"), cmd("compact"), cmd("superpowers:receiving-code-review"), cmd("code-review")];
+  assert.deepEqual(matchCommands("co", co).map((c) => c.name), ["code-review", "compact", "chrome-devtools-mcp:cookie-debugging", "superpowers:receiving-code-review"]);
   assert.equal(matchCommands("", Array.from({ length: 80 }, (_, i) => cmd(`c${i}`))).length, 50);
 });
 

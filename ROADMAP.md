@@ -20,16 +20,12 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
 - **Chat view (read-only).** `[C] CHAT` on a bot opens its conversation in a full-screen overlay:
   prompts, replies, tool calls with inputs, results and diffs, subagent work, and notices, live
   from the transcript.
+- **Send messages.** A composer under the chat types into the session's cmux surface: Enter sends,
+  multi-line messages arrive as one prompt, and a `/` menu lists the session's skills and commands
+  plus `/clear`, `/compact`, `/context` and `/cost`. Sessions outside cmux stay read-only, and
+  sending waits while a permission prompt is open.
 
 ## Next
-
-### Chat view
-
-Open a session's conversation from its bot.
-
-1. **Send messages:** type into the session from the app. To start, this injects text into the
-   session's cmux surface. Windows Terminal, IDE and desktop-app sessions stay read-only, and the
-   input box says why.
 
 ### Subagent helpers
 
