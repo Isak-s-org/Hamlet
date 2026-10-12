@@ -32,14 +32,14 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
   session is listed beside the chat: running ones first, with type, description, what it's doing, tool
   count, tokens and duration. Clicking a row, or an Agent card's OPEN, shows its transcript there.
   Narrower, its lines nest in the Agent card as before.
+- **Easy install.** `npx hamlet-village` runs the daemon and serves the built web UI without a
+  clone. The browser signs in once through a one-time link printed in the terminal.
 
 ## Next
 
-### Easy install
+### Menubar app
 
-- `npx hamlet` (or a global install) that runs the daemon and serves the built web UI, without
-  cloning the repo.
-- Later: a menubar or tray app that starts on login.
+A menubar or tray app that starts Hamlet on login.
 
 ## Later / ideas
 

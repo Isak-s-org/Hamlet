@@ -12,23 +12,37 @@ the village instead of hunting for the right terminal.
 
 ## Quickstart
 
-You need Node.js 22+, pnpm 12, [Claude Code](https://claude.com/claude-code) and a browser with
-WebGPU support.
+You need Node.js 22+, [Claude Code](https://claude.com/claude-code) and a browser with WebGPU
+support.
+
+```sh
+npx hamlet-village install   # shows the change to ~/.claude/settings.json and asks before writing it
+npx hamlet-village           # starts Hamlet and prints a one-time link to open the village
+```
+
+Open the printed link, start a Claude Code session, and a bot appears. The link signs your
+browser in. After that the tab reconnects on its own when you restart Hamlet, and the terminal
+prints a fresh link after each use for the next browser.
+
+> **Heads up:** `install` changes your global Claude Code settings. It only adds Hamlet's own
+> entries and backs the file up first. If Hamlet isn't running, Claude Code treats the hook as a
+> non-blocking error and falls back to its normal prompt. To remove the hooks, run
+> `npx hamlet-village uninstall`.
+
+### From source
+
+You also need pnpm 12.
 
 ```sh
 git clone https://github.com/Isak-gerre/hamlet.git
 cd hamlet
 pnpm install
-pnpm install-hooks   # shows the change to ~/.claude/settings.json and asks before writing it
+pnpm install-hooks   # same as `npx hamlet-village install`
 pnpm dev             # starts the daemon and the web UI together
 ```
 
-Open the URL from the `web` pane, start a Claude Code session, and a bot appears.
-
-> **Heads up:** `install-hooks` changes your global Claude Code settings. It only adds Hamlet's
-> own entries and backs the file up first. If the daemon isn't running, Claude Code treats the
-> hook as a non-blocking error and falls back to its normal prompt. To remove the hooks, run
-> `pnpm uninstall-hooks`.
+Open the URL from the `web` pane. The dev server lets the browser in without a sign-in link. To
+remove the hooks, run `pnpm uninstall-hooks`.
 
 ## Features
 
@@ -67,9 +81,10 @@ Open the URL from the `web` pane, start a Claude Code session, and a bot appears
 | `F` | Frame the whole world |
 | `?` | Show all controls |
 
-`pnpm dev` opens Turborepo's terminal UI with one pane per process. Use the arrow keys to switch
-panes. To answer requests from the terminal instead, select the `daemon` pane, press `i` to type
-into it, and `Ctrl+Z` to leave. You can also run `pnpm daemon` and `pnpm web` separately.
+From source, `pnpm dev` opens Turborepo's terminal UI with one pane per process. Use the arrow
+keys to switch panes. To answer requests from the terminal instead, select the `daemon` pane,
+press `i` to type into it, and `Ctrl+Z` to leave. You can also run `pnpm daemon` and `pnpm web`
+separately.
 
 Hamlet keeps its config and logs in `~/Library/Application Support/hamlet` (macOS),
 `%APPDATA%\hamlet` (Windows) or `~/.config/hamlet` (Linux). Set `HAMLET_HOME` to change this.
@@ -82,6 +97,7 @@ session's transcript, and sends your messages by pasting them into the session's
 
 | Package | Role |
 | --- | --- |
+| `packages/hamlet` | The `hamlet-village` npm package: one `hamlet` command that bundles the others and serves the built UI |
 | `packages/daemon` | Local server on `127.0.0.1:4747` that receives hook events, answers permission requests and serves each session's chat |
 | `packages/web` | The village, rendered with three.js (WebGPU) |
 | `packages/installer` | Adds Hamlet's hooks to `~/.claude/settings.json` and removes them again |
@@ -134,7 +150,8 @@ from then on get the button; restart any that were already running.
 
 ```sh
 pnpm typecheck
-pnpm test
+pnpm test    # includes packing hamlet-village and running it from an empty folder
+pnpm build   # builds the web UI and the npm package into packages/hamlet/dist
 ```
 
 Notes from the hook spike are in [`docs/spike.md`](docs/spike.md).

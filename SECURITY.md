@@ -16,6 +16,7 @@ Things that are especially relevant:
 - Anything that lets a process or web page reach the daemon without the token
 - Ways to answer a permission request without the user's input
 - Token leaks, for example into the browser, logs or URLs
+- Getting the browser session cookie without the one-time sign-in link
 - The installer corrupting or overwriting unrelated settings in `~/.claude/settings.json`
 
 Only the latest `main` is supported.
