@@ -1,6 +1,6 @@
-// Pure helpers for the chat view: what a tool card says, and the HTML for text, diffs and results.
+// Pure helpers for the chat view: what a tool card says, the HTML for text, diffs and results, and the composer's "/" menu.
 // Transcript content is untrusted, so every string goes through esc() before it becomes HTML.
-import type { ChatEntry } from "@hamlet/shared/world";
+import { BUILTIN_COMMANDS, type Bot, type ChatEntry, type Command, type Helper, type Subagent } from "@hamlet/shared/world";
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -17,6 +17,12 @@ export function toolSummary(name: string, input: unknown): string {
     : str(i.file_path) || str(i.notebook_path) || str(i.pattern) || str(i.url) || str(i.query) || str(i.skill) || str(i.description);
   return text.length > 120 ? `${text.slice(0, 119)}…` : text;
 }
+
+let markdown: ((text: string) => string) | undefined;
+/** markdown.ts loads after the app starts; until then prose is plain text. */
+export const setMarkdown = (fn: ((text: string) => string) | undefined) => void (markdown = fn);
+/** Claude's own writing (replies, agent reports, plans) as HTML. */
+export const prose = (text: string): string => `<div class="md">${(markdown ?? textHtml)(text)}</div>`;
 
 /** Claude's text: paragraphs keep their line breaks, fenced code becomes a code block. */
 export function textHtml(text: string): string {
@@ -56,6 +62,7 @@ export function inputHtml(name: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>;
   if (name === "Bash") return `<pre class="code">$ ${esc(str(i.command))}</pre>`;
   if (isAgent(name)) return `<pre class="code">${esc(str(i.prompt))}</pre>`;
+  if (name === "ExitPlanMode" && typeof i.plan === "string") return prose(i.plan);
   const diff = diffHtml(name, input);
   if (diff !== undefined) return `<p class="path">${esc(str(i.file_path))}</p>${diff}`;
   return `<pre class="code">${esc(JSON.stringify(input, null, 2))}</pre>`;
@@ -65,8 +72,10 @@ export function bytes(n: number): string {
   return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`;
 }
 
-export function resultHtml(r: Extract<ChatEntry, { kind: "result" }>): string {
+/** `report`: the result of an Agent/Task call, which is the subagent's own write-up. */
+export function resultHtml(r: Extract<ChatEntry, { kind: "result" }>, report = false): string {
   const note = r.truncated ? `<p class="note">Result truncated (${bytes(r.truncated)})</p>` : "";
+  if (report && !r.isError && r.text) return prose(r.text) + note;
   return `<pre class="out${r.isError ? " err" : ""}">${esc(r.text) || "(no output)"}</pre>${note}`;
 }
 
@@ -81,4 +90,95 @@ export class Seen {
   clear(): void {
     this.ids.clear();
   }
+}
+
+export type MenuCommand = Command & { builtin?: true };
+const MENU_MAX = 50;
+
+/** What to filter the "/" menu by, while the whole message is a lone `/word`. */
+export function menuQuery(text: string): string | undefined {
+  return /^\/(\S*)$/.exec(text)?.[1];
+}
+
+/** Names that start with the query first, then those whose part after a "plugin:" prefix does, then other matches; each group A–Z. */
+export function matchCommands(query: string, list: MenuCommand[]): MenuCommand[] {
+  const q = query.toLowerCase();
+  const rank = (c: MenuCommand) => {
+    const name = c.name.toLowerCase();
+    return name.startsWith(q) ? 0 : name.split(":").at(-1)!.startsWith(q) ? 1 : name.includes(q) ? 2 : 3;
+  };
+  return list
+    .map((c) => ({ c, r: rank(c) }))
+    .filter((m) => m.r < 3)
+    .sort((a, b) => a.r - b.r || a.c.name.localeCompare(b.c.name))
+    .slice(0, MENU_MAX)
+    .map((m) => m.c);
+}
+
+/** The session's commands plus the built-ins the transcript doesn't list. */
+export function allCommands(session: Command[]): MenuCommand[] {
+  const names = new Set(session.map((c) => c.name));
+  return [...session, ...BUILTIN_COMMANDS.filter((c) => !names.has(c.name)).map((c) => ({ ...c, builtin: true as const }))];
+}
+
+export function menuHtml(list: MenuCommand[], active: number): string {
+  return list
+    .map(
+      (c, i) =>
+        `<li role="option" id="chat-cmd-${i}" data-i="${i}" aria-selected="${i === active}"><span class="cmd">/${esc(c.name)}</span><span class="desc">${esc(c.description)}</span>${c.builtin ? `<span class="tag">built-in</span>` : ""}</li>`,
+    )
+    .join("");
+}
+
+/** Why this bot can't be sent to right now, and the composer's label for it. `readOnly`: typing is pointless too, not just sending. */
+export function sendBlock(bot: Bot | undefined): { reason: string; readOnly: boolean; label: "READ-ONLY" | "ENDED" | "WAITING" } | undefined {
+  if (!bot) return { reason: "This session has ended.", readOnly: true, label: "ENDED" };
+  if (!bot.terminal) return { reason: "Read-only: Hamlet can't find this session's terminal.", readOnly: true, label: "READ-ONLY" };
+  if (bot.terminal.kind !== "cmux") return { reason: "Read-only: sending works for cmux sessions only. This one runs in Windows Terminal.", readOnly: true, label: "READ-ONLY" };
+  // Waiting with no request held still means a dialog may be open in the terminal.
+  if (bot.permission || bot.state === "needs_input") return { reason: "Answer the WAITING prompt first.", readOnly: false, label: "WAITING" };
+}
+
+/** A path that fits `max` characters: whole trailing folders after "…/", as the end is the part that tells sessions apart. */
+export function shortPath(path: string, max = 40): string {
+  if (path.length <= max) return path;
+  const parts = path.split("/");
+  let tail = parts.pop()!;
+  // parts[0] is the empty root of an absolute path; it never joins the tail.
+  while (parts.length > 1 && `…/${parts.at(-1)}/${tail}`.length <= max) tail = `${parts.pop()}/${tail}`;
+  const out = `…/${tail}`;
+  return out.length <= max ? out : `…${out.slice(out.length - max + 1)}`;
+}
+
+/** Splits a backlog so only its last `n` top-level entries are drawn at first; subagent lines and results ride with them. */
+export function tailSplit(entries: ChatEntry[], n: number): { older: ChatEntry[]; tail: ChatEntry[] } {
+  let seen = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (e.parent || e.kind === "result") continue;
+    if (++seen === n) return { older: entries.slice(0, i), tail: entries.slice(i) };
+  }
+  return { older: [], tail: entries };
+}
+
+export function tokens(n: number): string {
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+export function elapsed(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** A row of the subagent list. `helper` is its villager while it runs; without one it is done. */
+export function subagentHtml(s: Subagent, helper: Helper | undefined, now: number): string {
+  const state = helper ? "running" : s.failed ? "failed" : "done";
+  const start = Date.parse(s.start ?? "");
+  const end = helper ? now : Date.parse(s.last ?? "");
+  const meta = [`${s.tools} tool${s.tools === 1 ? "" : "s"}`, s.tokens ? `${tokens(s.tokens)} tok` : "", start && end ? elapsed(end - start) : ""].filter(Boolean).join(" · ");
+  return `<span class="mark ${state}" title="${state}">${helper ? "●" : s.failed ? "✗" : "✓"}</span>
+    <span class="type">${esc(s.type ?? "Subagent")}</span><span class="meta">${esc(meta)}</span>
+    <span class="desc">${esc(s.description ?? "")}</span>${helper?.activity ? `<span class="act">${esc(helper.activity)}</span>` : ""}`;
 }

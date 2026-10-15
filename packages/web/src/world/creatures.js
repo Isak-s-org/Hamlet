@@ -165,9 +165,13 @@ const ICON = {
   errored: { text: '■', bg: 'var(--i-red, #ff6a4d)', fg: 'var(--i-on-red, #1b1c20)' },
 };
 
+const HELPER_SCALE = 0.55;
+
 export class CreatureView {
-  constructor(data, district, city, style) {
-    this.data = data; this.style = style;
+  /** `leader`: the bot's view when this is one of its subagent helpers, a small villager that follows it. */
+  constructor(data, district, city, style, leader = null) {
+    this.data = data; this.style = style; this.leader = leader;
+    this.scale = leader ? HELPER_SCALE : 1;
     this.group = new THREE.Group();
     this.seed = strHash(data.sessionId, 9) * 100;
     const s = data.sessionId;
@@ -177,6 +181,12 @@ export class CreatureView {
       : style === 'villagers' ? buildVillager(this.group, district.accent, s) : buildCaveman(this.group, district.accent, s);
     const start = district.hub.clone();
     this.pos = new THREE.Vector3(start.x + (strHash(s, 6) - 0.5) * 1.5, start.y, start.z + (strHash(s, 7) - 0.5) * 1.5);
+    if (leader) {
+      const a = strHash(s, 8) * Math.PI * 2;
+      this.offset = new THREE.Vector3(Math.cos(a) * 0.9, 0, Math.sin(a) * 0.9);
+      this.pos.copy(leader.pos).add(this.offset);
+      this.group.scale.setScalar(this.scale);
+    }
     this.group.position.copy(this.pos);
     this.path = []; this.pauseUntil = 0; this.planned = ''; this.heading = 0;
 
@@ -193,7 +203,7 @@ export class CreatureView {
     for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2 + 0.3; const p = part(this.mark, 0.14, 0.024, 0.14, Math.cos(a) * 0.95, 0.012, Math.sin(a) * 0.95, FX.paint); p.castShadow = false; p.receiveShadow = true; }
     this.sparks = Array.from({ length: 4 }, () => { const p = part(this.group, 0.05, 0.05, 0.05, 0, 0, 0, this.rig.kind === 'caveman' ? FX.spark : FX.dust); p.castShadow = false; return p; });
     this.hitbox = new THREE.Mesh(HIT_GEO, FX.hit); this.hitbox.scale.setScalar(Math.max(0.9, this.rig.height * 0.6));
-    this.hitbox.position.y = this.rig.height * 0.5; this.hitbox.userData.sessionId = data.sessionId;
+    this.hitbox.position.y = this.rig.height * 0.5; this.hitbox.userData.sessionId = leader ? leader.data.sessionId : data.sessionId;
     this.group.add(this.flag, this.patch, this.mark, this.hitbox);
     this.flagK = 0; this.markK = 0;
 
@@ -213,8 +223,8 @@ export class CreatureView {
     a.hidden = !activity;
   }
 
-  get focus() { return this.group.position.clone().add(new THREE.Vector3(0, this.rig.height * 0.6, 0)); }
-  get iconY() { return this.rig.height + 0.55; }
+  get focus() { return this.group.position.clone().add(new THREE.Vector3(0, this.rig.height * this.scale * 0.6, 0)); }
+  get iconY() { return this.rig.height * this.scale + 0.55; }
 
   plan(city, d, slot) {
     const st = this.data.state;
@@ -234,17 +244,22 @@ export class CreatureView {
     this.path.push(goal);
   }
 
-  update(dt, t, city, d, slot, camera) {
+  /** `held`: the bot is selected, so it keeps its place (and its pose) while its bubble is read. */
+  update(dt, t, city, d, slot, camera, held = false) {
     const st = this.data.state, key = `${st}:${d.branch}:${slot}`;
-    if (key !== this.planned) { this.planned = key; this.plan(city, d, slot); this.pauseUntil = 0; }
-    const speed = this.rig.kind === 'animal' ? 1.2 : 1.5;
+    if (this.leader) {
+      // Helpers trail their bot and stop once beside it, so they don't jitter while it stands still.
+      const goal = this.leader.pos.clone().add(this.offset);
+      this.path = this.pos.distanceTo(goal) > 0.3 ? [goal] : [];
+    } else if (key !== this.planned) { this.planned = key; this.plan(city, d, slot); this.pauseUntil = 0; }
+    const speed = (this.rig.kind === 'animal' ? 1.2 : 1.5) * (this.leader ? 1.4 : 1);
     let walking = false;
     const next = this.path[0];
-    if (next && t >= this.pauseUntil) {
+    if (next && t >= this.pauseUntil && !held) {
       const dx = next.x - this.pos.x, dz = next.z - this.pos.z, dist = Math.hypot(dx, dz);
       if (dist < 0.05) {
         this.path.shift();
-        if (!this.path.length && st === 'working') { this.pauseUntil = t + 2 + Math.random() * 4; this.planned = ''; }
+        if (!this.path.length && st === 'working' && !this.leader) { this.pauseUntil = t + 2 + Math.random() * 4; this.planned = ''; }
       } else {
         walking = true;
         const step = Math.min(dist, speed * dt);

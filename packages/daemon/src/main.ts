@@ -18,9 +18,11 @@ import {
   type Decision,
   type Question,
 } from "@hamlet/shared";
-import { bots, cwdOf, discover, hold, prune, release, retitle, sweep, track } from "./bots.js";
+import { serveBrowsers } from "./browser.js";
+import { bots, cwdOf, discover, hold, interrupt, prune, release, retitle, sweep, track } from "./bots.js";
 import { findTranscript, liveSessions, terminalHeaders } from "./registry.js";
 import { Feeds } from "./feed.js";
+import { cleanText, cmuxError, focusTerminal, KEYS, newAgent, sendKey, sendText, target, type CmuxTerminal } from "./terminal.js";
 import { forgetTranscript, isTranscriptPath, newTitles } from "./transcript.js";
 
 type Behavior = "allow" | "deny";
@@ -138,6 +140,16 @@ function gitPlace(cwd: string) {
   return place;
 }
 
+/** The repo's main checkout, so a new agent starts at its root rather than in one session's subfolder or worktree. */
+async function checkoutOf(cwd: string): Promise<string> {
+  try {
+    const common = (await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd })).stdout.trim();
+    return common.endsWith(".git") ? dirname(common) : cwd;
+  } catch {
+    return cwd;
+  }
+}
+
 const streams = new Set<ServerResponse>();
 
 function broadcast(): void {
@@ -178,21 +190,8 @@ async function scanLoop(): Promise<void> {
 }
 void scanLoop();
 
-async function focusTerminal(t: NonNullable<Bot["terminal"]>): Promise<void> {
-  if (t.kind === "cmux") {
-    await run("cmux", ["focus-panel", "--panel", t.surfaceId, "--workspace", t.workspaceId]);
-    if (process.platform === "darwin") await run("open", ["-b", "com.cmuxterm.app"]);
-    return;
-  }
-  // shortcut: WT has no focus-tab-by-session API, so this only raises the window; upgrade if WT adds one.
-  await run("powershell", [
-    "-NoProfile",
-    "-Command",
-    "$p = Get-Process WindowsTerminal -ErrorAction Stop | Select-Object -First 1; (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null",
-  ]);
-}
-
 const app = Fastify({ bodyLimit: 20 * 1024 * 1024, requestTimeout: 0 });
+const signIn = serveBrowsers(app, config.token, process.env.HAMLET_WEB_DIR);
 
 app.post(HOOK_PATH, async (request, reply) => {
   if (request.headers[TOKEN_HEADER] !== config.token) {
@@ -214,6 +213,8 @@ app.post(HOOK_PATH, async (request, reply) => {
     transcripts.delete(sessionId);
     feeds.drop(sessionId);
     if (transcript) forgetTranscript(transcript);
+    // /clear and /resume start the next session in the same process with no SessionStart hook; its registry file names it.
+    setTimeout(() => void scanSessions().catch((e) => log({ kind: "registry-error", error: String(e) })), 1000).unref();
   } else if (bot && transcript) {
     // Only the main thread's path is the session's transcript.
     if (body.agent_id === undefined) transcripts.set(bot.sessionId, transcript);
@@ -260,12 +261,6 @@ app.post(HOOK_PATH, async (request, reply) => {
   // The terminal's answer already applied; an empty reply just closes the hook.
   if (answer === "settled") return reply.code(200).send();
   return permissionResponse(answer, toolInput);
-});
-
-app.addHook("onRequest", async (request, reply) => {
-  if (request.url.startsWith(API_PREFIX) && request.headers[TOKEN_HEADER] !== config.token) {
-    return reply.code(401).send();
-  }
 });
 
 app.get(`${API_PREFIX}/stream`, (request, reply) => {
@@ -325,6 +320,56 @@ app.post(`${API_PREFIX}/terminal`, async (request, reply) => {
   return reply.code(204).send();
 });
 
+// The folder comes from a session Hamlet already knows, never from the request, so the UI can't pick an arbitrary path.
+app.post(`${API_PREFIX}/repos/:repo/new`, async (request, reply) => {
+  const { repo } = request.params as { repo: string };
+  const bot = [...bots.values()].find((b) => b.repo === repo && b.cwd);
+  if (!bot) return reply.code(404).send();
+  // Beside the repo's other agents when one of them runs in cmux.
+  const cmux = [...bots.values()].find((b) => b.repo === repo && b.terminal?.kind === "cmux")?.terminal as CmuxTerminal | undefined;
+  try {
+    await newAgent(await checkoutOf(bot.cwd), repo, cmux?.workspaceId);
+  } catch (e) {
+    return reply.code(502).send({ error: cmuxError(e as { killed?: boolean; stderr?: string }) });
+  }
+  log({ kind: "new-agent", repo });
+  return reply.code(204).send();
+});
+
+app.post(`${API_PREFIX}/sessions/:id/send`, async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const { text } = (request.body ?? {}) as { text?: unknown };
+  if (typeof text !== "string") return reply.code(400).send();
+  const clean = cleanText(text);
+  if ("error" in clean) return reply.code(clean.error === "empty" ? 400 : 413).send({ error: clean.error });
+  // Typed text would land in a dialog the terminal has open, and its Enter would answer it.
+  const to = target(bots.get(id));
+  if ("refuse" in to) return reply.code(to.refuse).send();
+  try {
+    await sendText(to.terminal, clean.text);
+  } catch (e) {
+    return reply.code(502).send({ error: cmuxError(e as { killed?: boolean; stderr?: string }) });
+  }
+  log({ kind: "sent", sessionId: id, chars: clean.text.length });
+  return reply.code(204).send();
+});
+
+app.post(`${API_PREFIX}/sessions/:id/key/:key`, async (request, reply) => {
+  const { id, key } = request.params as { id: string; key: string };
+  if (!Object.hasOwn(KEYS, key)) return reply.code(404).send();
+  // A key pressed into an open dialog would answer it.
+  const to = target(bots.get(id));
+  if ("refuse" in to) return reply.code(to.refuse).send();
+  try {
+    await sendKey(to.terminal, KEYS[key as keyof typeof KEYS]);
+  } catch (e) {
+    return reply.code(502).send({ error: cmuxError(e as { killed?: boolean; stderr?: string }) });
+  }
+  if (key === "stop") interrupt(id), broadcast();
+  log({ kind: "key", sessionId: id, key });
+  return reply.code(204).send();
+});
+
 createInterface({ input: process.stdin }).on("line", (line) => {
   const [cmd, idText] = line.trim().split(/\s+/);
   const id = Number(idText);
@@ -333,7 +378,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
 });
 
-await app.listen({ host: "127.0.0.1", port: config.port });
+try {
+  await app.listen({ host: "127.0.0.1", port: config.port });
+} catch (e) {
+  if ((e as NodeJS.ErrnoException).code !== "EADDRINUSE") throw e;
+  console.error(`Port ${config.port} is in use. Is Hamlet already running?`);
+  process.exit(1);
+}
 console.log(`hamlet spike daemon on http://127.0.0.1:${config.port}${HOOK_PATH}`);
 console.log(`logging to ${logFile}`);
 console.log(autoReply ? `auto-replying "${autoReply}" to PermissionRequest` : "holding PermissionRequests for manual answers");
+if (signIn) console.log(`Open Hamlet (one-time link): http://127.0.0.1:${config.port}${signIn}`);

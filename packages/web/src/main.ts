@@ -1,8 +1,9 @@
-import { API_PREFIX, type Bot, type Decision, type PendingPermission, type Question, type WorldSnapshot } from "@hamlet/shared/world";
-import { chatOpen, chatSession, closeChat, jumpToEnd, openChat, updateChat } from "./chat.js";
-import { esc } from "./chat-format.js";
+import { API_PREFIX, type Bot, type PendingPermission, type WorldSnapshot } from "@hamlet/shared/world";
+import { answerQuestion, chatSession, chatSurface, closeChat, emptyChat, jumpToEnd, openChat, setChatHooks, updateChat } from "./chat.js";
+import { esc, setMarkdown, shortPath } from "./chat-format.js";
 import { pop } from "./motion.js";
 import { nameAll } from "./names.js";
+import { decide, prunePicks, questionsOf } from "./questions.js";
 import { createWorld, type World } from "./world/engine.js";
 
 const SETTINGS_KEY = "hamlet-settings";
@@ -110,6 +111,10 @@ function select(id: string | null, fly = true): void {
   selected = id;
   error = "";
   world?.select(id, fly);
+  // The chat sheet shows the selected session; deselecting leaves it open and empty.
+  const b = selBot();
+  if (b) openChat(b, nameOf(b));
+  else emptyChat();
   render();
 }
 
@@ -120,74 +125,20 @@ function next(): void {
   select(w[(i + 1) % w.length]!.sessionId);
 }
 
-const questionsOf = (p?: PendingPermission): Question[] | undefined =>
-  p?.toolName === "AskUserQuestion" ? (((p.toolInput ?? {}) as { questions?: Question[] }).questions ?? []) : undefined;
-
-/** What the user has picked so far, per held request: option labels per question, plus "Other" text. */
-type Picks = { chosen: Set<string>[]; other: string[] };
-const OTHER = "\0other";
-const picks = new Map<number, Picks>();
-
-function picksFor(p: PendingPermission, qs: Question[]): Picks {
-  let s = picks.get(p.id);
-  if (!s) picks.set(p.id, (s = { chosen: qs.map(() => new Set()), other: qs.map(() => "") }));
-  return s;
-}
-
-/** Answers keyed by question text, multi-select labels joined with ", ", or undefined while one is missing. */
-function answersFor(p: PendingPermission, qs: Question[]): Record<string, string> | undefined {
-  const s = picksFor(p, qs);
-  const out: Record<string, string> = {};
-  for (const [i, q] of qs.entries()) {
-    const labels = q.options.map((o) => o.label).filter((l) => s.chosen[i]!.has(l));
-    if (s.chosen[i]!.has(OTHER) && s.other[i]!.trim()) labels.push(s.other[i]!.trim());
-    if (!labels.length) return;
-    out[q.question] = labels.join(", ");
-  }
-  return out;
-}
-
-function pick(arg: string): void {
-  const p = selBot()?.permission;
-  const qs = questionsOf(p);
-  if (!p || !qs) return;
-  const [i, j] = arg.split(":").map(Number) as [number, number];
-  const q = qs[i];
-  if (!q) return;
-  const label = j < 0 ? OTHER : q.options[j]?.label;
-  if (label === undefined) return;
-  const chosen = picksFor(p, qs).chosen[i]!;
-  if (q.multiSelect) chosen.has(label) ? chosen.delete(label) : chosen.add(label);
-  else chosen.clear(), chosen.add(label);
-  renderBubble(true);
-  if (label === OTHER) bubble.querySelector<HTMLInputElement>(`input[data-q="${i}"]`)?.focus();
-}
-
 async function answer(behavior: "allow" | "deny"): Promise<void> {
   const p = selBot()?.permission;
   if (!p) return;
-  const qs = questionsOf(p);
-  const answers = qs && behavior === "allow" ? answersFor(p, qs) : undefined;
-  if (qs && behavior === "allow" && !answers) return;
-  error = "";
-  try {
-    const decision: Decision = { id: p.id, behavior, ...(answers && { answers }) };
-    const res = await fetch(`${API_PREFIX}/decide`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(decision),
-    });
-    if (res.status === 404) throw new Error("That request was already answered or cancelled.");
-    if (!res.ok) throw new Error(`Daemon answered ${res.status}.`);
-  } catch (e) {
-    error = (e as Error).message;
-    renderBubble(true);
-  }
+  error = (await decide({ id: p.id, behavior })) ?? "";
+  if (error) renderBubble(true);
 }
 
-function openSelectedChat(): void {
+/** A and D: allow or deny in the bubble. A question is answered in the chat, which the key reopens if it was closed. */
+function respond(behavior: "allow" | "deny"): void {
   const b = selBot();
-  if (b) openChat(b, nameOf(b));
+  if (!b?.permission) return;
+  if (!questionsOf(b.permission)) return void answer(behavior);
+  if (chatSession() === b.sessionId) void answerQuestion(behavior);
+  else openChat(b, nameOf(b));
 }
 
 async function openTerminal(): Promise<void> {
@@ -208,12 +159,20 @@ async function openTerminal(): Promise<void> {
   renderBubble(true);
 }
 
+async function newAgent(repo: string): Promise<void> {
+  const res = await fetch(`${API_PREFIX}/repos/${encodeURIComponent(repo)}/new`, { method: "POST" }).catch(() => undefined);
+  if (res?.ok) return;
+  const why = res ? ((await res.json().catch(() => ({}))) as { error?: string }).error ?? `daemon answered ${res.status}` : "daemon unreachable";
+  alert(`Could not start an agent in ${repo}: ${why}`);
+}
+
 function toggle(el: HTMLElement, open?: boolean): void {
   el.hidden = open === undefined ? !el.hidden : !open;
 }
 
 const RANK: Record<Bot["state"], number> = { needs_input: 0, errored: 1, working: 2, idle: 3 };
-const expanded = new Set<string>();
+/** Repos the user folded away; every other repo shows its sessions. */
+const collapsed = new Set<string>();
 const repoEls = new Map<string, HTMLLIElement>();
 const agentEls = new Map<string, HTMLLIElement>();
 const motion = matchMedia("(prefers-reduced-motion: no-preference)");
@@ -282,10 +241,11 @@ function renderSidebar(): void {
         <span class="initial">${esc(repo.slice(0, 1).toUpperCase())}</span><span class="chev" aria-hidden="true">›</span>
         <span class="name">${esc(repo)}</span><span class="n mono soft"></span>
         <span class="badges"><span class="badge amber" title="Waiting">▲<b>0</b></span><span class="badge red" title="Errored">■<b>0</b></span></span>
-        </button><div class="agents"><ol></ol></div></li>`);
+        </button><button class="spawn" data-act="new-agent" data-arg="${esc(repo)}" title="New agent in ${esc(repo)}" aria-label="New agent in ${esc(repo)}">+</button>
+        <div class="agents"><ol></ol></div></li>`);
       repoEls.set(repo, li);
     }
-    const open = expanded.has(repo);
+    const open = !collapsed.has(repo);
     const waiting = rb.filter((b) => b.state === "needs_input").length;
     const errored = rb.filter((b) => b.state === "errored").length;
     li.classList.toggle("open", open);
@@ -293,6 +253,8 @@ function renderSidebar(): void {
     li.classList.toggle("err", errored > 0);
     li.querySelector(".city")!.setAttribute("aria-expanded", String(open));
     li.querySelector(".n")!.textContent = String(rb.length);
+    // A new agent's folder comes from a live session in the repo.
+    li.querySelector<HTMLButtonElement>(".spawn")!.hidden = !rb.length;
     setBadge(li.querySelector(".badge.amber")!, waiting);
     setBadge(li.querySelector(".badge.red")!, errored);
     rb.sort((a, b) => RANK[a.state] - RANK[b.state] || a.since - b.since);
@@ -303,7 +265,8 @@ function renderSidebar(): void {
 }
 
 function toggleRepo(repo: string): void {
-  if (!expanded.delete(repo)) expanded.add(repo), world?.flyToCity(repo);
+  if (collapsed.delete(repo)) world?.flyToCity(repo);
+  else collapsed.add(repo);
   render();
 }
 
@@ -328,9 +291,15 @@ function render(): void {
   const chatting = chatSession();
   if (chatting) {
     const b = bots.find((x) => x.sessionId === chatting);
-    updateChat(b, b ? nameOf(b) : chatting.slice(0, 6));
+    // /clear and /resume end the session and start the next one in the same terminal: the chat moves to it.
+    const next = b ? undefined : bots.find((x) => x.terminal?.kind === "cmux" && x.terminal.surfaceId === chatSurface());
+    if (next) return select(next.sessionId, false);
+    else updateChat(b, b ? nameOf(b) : chatting.slice(0, 6));
   }
 }
+
+/** A bubble row: a short label, and a value cut to the card's width with the whole of it on hover. */
+const kv = (k: string, value: string, full = value) => `<span class="kv"><span class="k">${k}</span><b title="${esc(full)}">${esc(value)}</b></span>`;
 
 let bubbleKey = "";
 function renderBubble(force = false): void {
@@ -357,40 +326,18 @@ function renderBubble(force = false): void {
     </header>
     <div class="body">${
       p && questionsOf(p)
-        ? questionsHtml(p, questionsOf(p)!)
+        ? `${kv("ASKS", questionsOf(p)!.map((q) => q.question).join(" · "))}<span>Answer in the chat.</span>`
         : p
-        ? `<span class="kv">TOOL  <b>${esc(p.toolName)}</b></span>
+        ? `${kv("TOOL", p.toolName)}
            <pre><span class="soft">${p.toolName === "Bash" ? "$ " : ""}</span>${esc(preview(p.toolName, p.toolInput))}</pre>
-           <span class="cwd">CWD   ${esc(p.cwd)}</span>
+           ${kv("CWD", shortPath(p.cwd), p.cwd)}
            <div class="actions">
              <button class="primary" data-act="allow">[A] ALLOW</button>
              <button class="outline" data-act="deny">[D] DENY</button>
            </div>`
-        : `${b.state === "working" ? `<span class="kv">NOW   <b>${esc(b.activity ?? "Thinking…")}</b></span>` : ""}<span class="cwd">CWD   ${esc(b.cwd)}</span>${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
-    }<div class="actions"><button class="outline" data-act="chat" title="Read this session's conversation">[C] CHAT</button>${b.terminal ? `<button class="primary" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button>` : ""}</div>${error ? `<p class="error">${esc(error)}</p>` : ""}</div></div>`;
+        : `${b.state === "working" ? kv("NOW", b.activity ?? "Thinking…") : ""}${kv("CWD", shortPath(b.cwd), b.cwd)}${b.state === "needs_input" ? "<span>Waiting in the terminal.</span>" : ""}`
+    }${b.terminal ? `<div class="actions"><button class="primary" data-act="terminal" title="Open this session's terminal">[T] OPEN TERMINAL</button></div>` : ""}${error ? `<p class="error">${esc(error)}</p>` : ""}</div></div>`;
   if (changed) pop(bubble.querySelector<HTMLElement>(".pop")!);
-}
-
-function questionsHtml(p: PendingPermission, qs: Question[]): string {
-  const s = picksFor(p, qs);
-  const ready = !!answersFor(p, qs);
-  return `<div class="questions">${qs
-    .map((q, i) => {
-      const opt = (j: number, label: string, desc = "") =>
-        `<button class="opt" role="${q.multiSelect ? "checkbox" : "radio"}" aria-checked="${s.chosen[i]!.has(j < 0 ? OTHER : label)}" data-act="pick" data-arg="${i}:${j}">
-          <b>${esc(label)}</b>${desc ? `<span>${esc(desc)}</span>` : ""}</button>`;
-      return `<div class="q" role="group" aria-label="${esc(q.header || q.question)}">
-        <span class="kicker">${esc(q.header)}${q.multiSelect ? " · PICK ANY" : ""}</span>
-        <p>${esc(q.question)}</p>
-        <div class="opts">${q.options.map((o, j) => opt(j, o.label, o.description)).join("")}${opt(-1, "Other", "Type your own answer")}</div>
-        ${s.chosen[i]!.has(OTHER) ? `<input class="other" data-q="${i}" placeholder="Your answer" maxlength="2000" value="${esc(s.other[i]!)}">` : ""}
-      </div>`;
-    })
-    .join("")}</div>
-    <div class="actions">
-      <button class="primary" data-act="allow" ${ready ? "" : "disabled"}>[A] ANSWER</button>
-      <button class="outline" data-act="deny">[D] DECLINE</button>
-    </div>`;
 }
 
 const sw = (k: Key, label: string) => {
@@ -463,9 +410,8 @@ app.addEventListener("click", (e) => {
     case "next": next(); break;
     case "close": select(null); break;
     case "allow": case "deny": void answer(el.dataset.act); break;
-    case "pick": pick(arg); break;
     case "terminal": void openTerminal(); break;
-    case "chat": openSelectedChat(); break;
+    case "new-agent": void newAgent(arg); break;
     case "chat-close": closeChat(); break;
     case "chat-jump": jumpToEnd(); break;
     case "zoom-in": world?.zoom(-1); break;
@@ -492,19 +438,6 @@ app.addEventListener("click", (e) => {
   }
 });
 
-// Typing in "Other" updates the picks in place; a rebuild would steal focus.
-bubble.addEventListener("input", (e) => {
-  const input = e.target as HTMLInputElement;
-  const p = selBot()?.permission;
-  const qs = questionsOf(p);
-  if (!p || !qs || input.dataset.q === undefined) return;
-  picksFor(p, qs).other[Number(input.dataset.q)] = input.value;
-  bubble.querySelector<HTMLButtonElement>('[data-act="allow"]')!.disabled = !answersFor(p, qs);
-});
-bubble.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.target as HTMLElement).matches("input.other")) void answer("allow");
-});
-
 // Sliders update in place so re-rendering never interrupts a drag.
 settingsEl.addEventListener("input", (e) => {
   const input = e.target as HTMLInputElement;
@@ -519,29 +452,24 @@ window.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
   if (/input|textarea|select/i.test(t.tagName) || t.isContentEditable) return;
   const k = e.key.toLowerCase();
-  // The chat covers the village, so only its own keys work while it's open.
-  if (chatOpen()) {
-    if (k === "escape" || k === "c") closeChat();
-    return;
-  }
+  // Each ESC steps back one: the help, the settings, the selection, then the emptied chat.
   if (k === "escape") {
     if (!scrim.hidden) scrim.hidden = true;
     else if (!settingsEl.hidden) toggleSettings(false);
-    else select(null);
+    else if (selected) select(null);
+    else closeChat();
   } else if (e.key === "?") toggle(scrim);
   else if (e.key === ",") toggleSettings();
   else if (k === "n") next();
-  else if (k === "a" && selBot()?.permission) void answer("allow");
-  else if (k === "d" && selBot()?.permission) void answer("deny");
+  else if (k === "a" || k === "d") respond(k === "a" ? "allow" : "deny");
   else if (k === "t") void openTerminal();
-  else if (k === "c") openSelectedChat();
 });
 
 function applySnapshot(snapshot: WorldSnapshot): void {
   const before = new Map(bots.map((b) => [b.sessionId, b.state]));
   bots = snapshot.bots;
   names = nameAll(bots.map((b) => b.sessionId), cfg().world);
-  for (const id of picks.keys()) if (!bots.some((b) => b.permission?.id === id)) picks.delete(id);
+  prunePicks(bots.flatMap((b) => (b.permission ? [b.permission.id] : [])));
   if (primed) for (const b of bots) if (b.state === "needs_input" && before.get(b.sessionId) !== "needs_input") announce(b);
   primed = true;
   document.title = waitingOldestFirst().length ? `(${waitingOldestFirst().length}) Hamlet` : "Hamlet";
@@ -552,8 +480,9 @@ function applySnapshot(snapshot: WorldSnapshot): void {
   }
   if (grew) world?.setRepos(repoList());
   world?.setBots(villagers());
-  if (selected && !selBot()) select(null, false);
-  else render();
+  // An ended session stays in the chat, which moves on to the next session in its terminal (see render).
+  if (selected && !selBot()) (selected = null), world?.select(null, false);
+  render();
 }
 
 const villagers = () => bots.map((b) => ({ ...b, name: nameOf(b) }));
@@ -623,6 +552,7 @@ const reposReady = new Promise<void>((r) => (gotRepos = r));
 const events = new EventSource(`${API_PREFIX}/stream`);
 events.onopen = () => {
   offline = false;
+  prunePicks([]);
   primed = false;
   render();
 };
@@ -634,7 +564,7 @@ events.onmessage = (e) => {
 };
 events.onerror = () => {
   offline = true;
-  if (!introDone) progress(0.35, "Daemon offline. Start it with pnpm daemon.");
+  if (!introDone) progress(0.35, "Daemon offline. Start it with npx hamlet-village.");
   render();
 };
 setInterval(render, 5000); // keeps "waiting for" ages fresh
@@ -666,3 +596,8 @@ try {
   console.error(e);
   progress(0, `Could not start the 3D view. ${(e as Error).message ?? e}`);
 }
+
+/** markdown-it is the chat's biggest piece: fetched when the page is idle, so it's ready before a chat opens. */
+const loadMarkdown = () => import("./markdown.js").then((m) => setMarkdown(m.mdHtml));
+(window.requestIdleCallback ?? ((f: () => void) => setTimeout(f, 1000)))(() => void loadMarkdown());
+setChatHooks({ inset: (px) => world?.setInset(px), loadMarkdown: () => void loadMarkdown() });

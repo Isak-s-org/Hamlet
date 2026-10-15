@@ -11,7 +11,7 @@ const session = () => {
   const dir = mkdtempSync(join(tmpdir(), "hamlet-feed-"));
   return { dir, path: join(dir, "s1.jsonl") };
 };
-const kinds = (events: ChatEvent[]) => events.map((e) => ("entries" in e ? e.entries.length : "reset" in e ? "reset" : e.error));
+const kinds = (events: ChatEvent[]) => events.map((e) => ("entries" in e ? e.entries.length : "reset" in e ? "reset" : "commands" in e ? "commands" : "queued" in e ? "queued" : "subagents" in e ? "subagents" : e.error));
 
 test("a feed sends its backlog in batches, then what each poll appends", async () => {
   const { path } = session();
@@ -31,6 +31,24 @@ test("a feed sends its backlog in batches, then what each poll appends", async (
   assert.equal(feed.viewers, 1);
 });
 
+test("a feed keeps the queue of typed messages, leaving out notifications", async () => {
+  const { path } = session();
+  const op = (operation: string, content?: string) => JSON.stringify({ type: "queue-operation", operation, timestamp: "t", content }) + "\n";
+  writeFileSync(path, op("enqueue", "first") + op("enqueue", "<task-notification>x</task-notification>") + op("enqueue", "second") + op("dequeue"));
+  const feed = new ChatFeed(path);
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(events, [{ queued: ["second"] }]);
+  // A running turn takes a queued message in by content.
+  appendFileSync(path, op("remove", "second"));
+  await feed.poll();
+  assert.deepEqual(events.at(-1), { queued: [] });
+  const late: ChatEvent[] = [];
+  feed.subscribe((e) => late.push(e));
+  assert.deepEqual(late, []);
+});
+
 test("subagent entries arrive with their parent once the meta file exists", async () => {
   const { dir, path } = session();
   const call = JSON.stringify({ type: "assistant", uuid: "a1", timestamp: "t", message: { content: [{ type: "tool_use", id: "toolu_P", name: "Agent", input: {} }] } });
@@ -47,6 +65,29 @@ test("subagent entries arrive with their parent once the meta file exists", asyn
   writeFileSync(join(subs, "agent-x.meta.json"), JSON.stringify({ toolUseId: "toolu_P" }));
   await feed.poll();
   assert.deepEqual(feed.entries.map((e) => [e.kind, e.parent]), [["tool", undefined], ["prompt", "toolu_P"]]);
+});
+
+test("a feed sums up each subagent: type, tools, latest turn's tokens, times and failure", async () => {
+  const { dir, path } = session();
+  const subs = join(dir, "s1", "subagents");
+  mkdirSync(subs, { recursive: true });
+  writeFileSync(path, "");
+  writeFileSync(join(subs, "agent-x.meta.json"), JSON.stringify({ toolUseId: "toolu_P", agentType: "Explore", description: "Find it" }));
+  const turn = (id: string, at: string, block: object, usage: object) => JSON.stringify({ type: "assistant", uuid: `${id}${at}`, timestamp: at, message: { id, content: [block], usage } }) + "\n";
+  const usage = { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 8 };
+  // One turn split into two lines repeats its usage; the latest turn's count is the subagent's.
+  writeFileSync(join(subs, "agent-x.jsonl"), turn("m1", "t1", { type: "thinking", thinking: "hm" }, usage) + turn("m1", "t2", { type: "tool_use", id: "toolu_R", name: "Read", input: {} }, usage));
+  const feed = new ChatFeed(path);
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(events.at(-1), { subagents: [{ agentId: "x", parent: "toolu_P", type: "Explore", description: "Find it", tokens: 1110, tools: 1, start: "t1", last: "t2" }] });
+  appendFileSync(path, JSON.stringify({ type: "user", uuid: "r", timestamp: "t3", message: { content: [{ type: "tool_result", tool_use_id: "toolu_P", content: "boom", is_error: true }] } }) + "\n");
+  await feed.poll();
+  assert.equal((events.at(-1) as { subagents: { failed?: boolean }[] }).subagents[0]!.failed, true);
+  const late: ChatEvent[] = [];
+  feed.subscribe((e) => late.push(e));
+  assert.deepEqual(kinds(late), [3, "subagents"]);
 });
 
 test("a rewritten transcript resets the feed", async () => {
@@ -145,4 +186,42 @@ test("a path change moves the viewers to the new feed", async () => {
   leaveB();
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(feeds.size, 0);
+});
+
+const skills = (names: string[], isInitial = true) =>
+  JSON.stringify({ type: "attachment", uuid: `l-${names.join()}`, timestamp: "t", attachment: { type: "skill_listing", isInitial, names, content: names.map((n) => `- ${n}: about ${n}`).join("\n") } }) + "\n";
+const commandEvents = (events: ChatEvent[]) => events.flatMap((e) => ("commands" in e ? [e.commands.map((c) => c.name)] : []));
+
+test("a feed sends the session's commands after the backlog, and each change", async () => {
+  const { path } = session();
+  writeFileSync(path, prompt(1) + skills(["init", "review"]));
+  const feed = new ChatFeed(path);
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(commandEvents(events), [["init", "review"]]);
+  assert.ok("entries" in events[0]!);
+  appendFileSync(path, skills(["deploy"], false));
+  await feed.poll();
+  assert.deepEqual(commandEvents(events).at(-1), ["init", "review", "deploy"]);
+  const late: ChatEvent[] = [];
+  feed.subscribe((e) => late.push(e));
+  assert.deepEqual(commandEvents(late), [["init", "review", "deploy"]]);
+  appendFileSync(path, skills(["only"]));
+  await feed.poll();
+  assert.deepEqual(commandEvents(late).at(-1), ["only"]);
+});
+
+test("a subagent's skill listing is not the session's", async () => {
+  const { dir, path } = session();
+  writeFileSync(path, prompt(1));
+  const subs = join(dir, "s1", "subagents");
+  mkdirSync(subs, { recursive: true });
+  writeFileSync(join(subs, "agent-x.jsonl"), skills(["sub-only"]));
+  writeFileSync(join(subs, "agent-x.meta.json"), JSON.stringify({ toolUseId: "toolu_P" }));
+  const feed = new ChatFeed(path);
+  const events: ChatEvent[] = [];
+  feed.subscribe((e) => events.push(e));
+  await feed.poll();
+  assert.deepEqual(commandEvents(events), []);
 });

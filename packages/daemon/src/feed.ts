@@ -2,8 +2,8 @@
 // chat on a session shares one feed, which keeps the entries so another viewer gets them at once.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChatEntry, ChatEvent } from "@hamlet/shared";
-import { toEntries } from "./chat.js";
+import type { ChatEntry, ChatEvent, Command, Subagent } from "@hamlet/shared";
+import { applyQueueOp, commandsIn, toEntries, tokensOf, typed } from "./chat.js";
 import { JsonlTail } from "./transcript.js";
 
 /** Entries per SSE message, so a long backlog renders progressively. */
@@ -16,9 +16,15 @@ type Listener = (e: ChatEvent) => void;
 export class ChatFeed {
   readonly entries: ChatEntry[] = [];
   private main: JsonlTail;
-  private subagents = new Map<string, { tail: JsonlTail; parent: string }>();
+  private subagents = new Map<string, { tail: JsonlTail; info: Subagent }>();
+  /** Tool calls that came back as errors, so a failed Agent call marks its subagent. */
+  private failedCalls = new Set<string>();
   private listeners = new Set<Listener>();
+  /** The session's "/" commands, from its transcript's skill listings. */
+  private commands = new Map<string, Command>();
   private failed: "unreadable" | "no-transcript" | undefined;
+  /** Claude Code's input queue, notifications included; viewers get only what was typed. */
+  private queue: string[] = [];
 
   constructor(readonly path: string, private readonly onError: (e: unknown) => void = () => {}) {
     this.main = new JsonlTail(path, MAX_LINE);
@@ -31,6 +37,9 @@ export class ChatFeed {
   /** Sends everything read so far, then each change. Returns the unsubscribe function. */
   subscribe(listener: Listener): () => void {
     for (let i = 0; i < this.entries.length; i += BATCH) this.deliver(listener, { entries: this.entries.slice(i, i + BATCH) });
+    if (this.commands.size) this.deliver(listener, { commands: [...this.commands.values()] });
+    if (this.subagents.size) this.deliver(listener, { subagents: this.summaries() });
+    if (this.queue.some(typed)) this.deliver(listener, { queued: this.queue.filter(typed) });
     if (this.failed) this.deliver(listener, { error: this.failed });
     this.listeners.add(listener);
     return () => this.unsubscribe(listener);
@@ -74,18 +83,52 @@ export class ChatFeed {
     if (read.reset) {
       this.entries.length = 0;
       this.subagents.clear();
+      this.failedCalls.clear();
+      this.commands.clear();
+      this.queue = [];
       this.emit({ reset: true });
     }
     const fresh = read.lines.flatMap((line) => toEntries(line));
+    const known = this.subagents.size;
+    let subChanged = false;
     for (const sub of await this.subagentTails()) {
       try {
-        for (const line of (await sub.tail.read()).lines) fresh.push(...toEntries(line, sub.parent));
+        for (const line of (await sub.tail.read()).lines) {
+          const entries = toEntries(line, sub.info.parent);
+          fresh.push(...entries);
+          sub.info.tokens = tokensOf(line) ?? sub.info.tokens;
+          for (const e of entries) {
+            if (e.kind === "tool") sub.info.tools++;
+            if (e.at) (sub.info.start ??= e.at), (sub.info.last = e.at);
+          }
+          subChanged = true;
+        }
       } catch (e) {
         this.onError(e);
       }
     }
-    for (const entry of fresh) this.entries.push(entry);
+    for (const entry of fresh) {
+      this.entries.push(entry);
+      if (entry.kind === "result" && entry.isError && !this.failedCalls.has(entry.toolUseId)) {
+        this.failedCalls.add(entry.toolUseId);
+        subChanged ||= [...this.subagents.values()].some((s) => s.info.parent === entry.toolUseId);
+      }
+    }
     for (let i = 0; i < fresh.length; i += BATCH) this.emit({ entries: fresh.slice(i, i + BATCH) });
+    if (subChanged || this.subagents.size !== known) this.emit({ subagents: this.summaries() });
+    // Only the main transcript's listing is the session's; subagents get their own.
+    let listed = false;
+    for (const line of read.lines) {
+      const found = commandsIn(line);
+      if (!found) continue;
+      if (found.initial) this.commands.clear();
+      for (const c of found.commands) this.commands.set(c.name, c);
+      listed = true;
+    }
+    if (listed) this.emit({ commands: [...this.commands.values()] });
+    let requeued = false;
+    for (const line of read.lines) requeued = applyQueueOp(line, this.queue) || requeued;
+    if (requeued) this.emit({ queued: this.queue.filter(typed) });
   }
 
   /** Subagents write <session>/subagents/agent-<id>.jsonl beside a meta file naming the call that started them. */
@@ -96,10 +139,18 @@ export class ChatFeed {
       if (!id || this.subagents.has(id)) continue;
       try {
         const meta = JSON.parse(await readFile(join(dir, `agent-${id}.meta.json`), "utf8"));
-        if (typeof meta.toolUseId === "string") this.subagents.set(id, { tail: new JsonlTail(join(dir, name), MAX_LINE), parent: meta.toolUseId });
+        if (typeof meta.toolUseId !== "string") continue;
+        const info: Subagent = { agentId: id, parent: meta.toolUseId, tokens: 0, tools: 0 };
+        if (typeof meta.agentType === "string") info.type = meta.agentType;
+        if (typeof meta.description === "string") info.description = meta.description;
+        this.subagents.set(id, { tail: new JsonlTail(join(dir, name), MAX_LINE), info });
       } catch {} // the meta file may not be written yet; the next poll tries again
     }
     return [...this.subagents.values()];
+  }
+
+  private summaries(): Subagent[] {
+    return [...this.subagents.values()].map(({ info }) => ({ ...info, ...(this.failedCalls.has(info.parent) ? { failed: true } : {}) }));
   }
 
   private emit(e: ChatEvent): void {

@@ -17,30 +17,29 @@ Planned features, roughly in priority order. Hamlet is an early prototype, so th
   hooks were installed show up right away, and a bot leaves soon after its process exits.
 - **Notifications.** A sound, and optionally a desktop notification, when a bot starts waiting while
   the tab isn't focused. The tab title shows how many bots are waiting.
-- **Chat view (read-only).** `[C] CHAT` on a bot opens its conversation in a full-screen overlay:
+- **Chat view (read-only).** `[C] CHAT` on a bot opens its conversation in a sheet beside the
+  village (replies rendered as markdown):
   prompts, replies, tool calls with inputs, results and diffs, subagent work, and notices, live
   from the transcript.
+- **Send messages.** A composer under the chat types into the session's cmux surface: Enter sends,
+  multi-line messages arrive as one prompt, and a `/` menu lists the session's skills and commands
+  plus `/clear`, `/compact`, `/context` and `/cost`. Sessions outside cmux stay read-only, and
+  sending waits while a permission prompt is open.
+- **Subagent helpers.** Each running subagent is a small villager that follows its bot, tagged with
+  its type and what it's doing (`SubagentStart` / `SubagentStop`). A subagent's permission prompt
+  shows over its helper.
+- **Subagent column.** Drag the chat sheet's left edge wider (900px or more) and every subagent of the
+  session is listed beside the chat: running ones first, with type, description, what it's doing, tool
+  count, tokens and duration. Clicking a row, or an Agent card's OPEN, shows its transcript there.
+  Narrower, its lines nest in the Agent card as before.
+- **Easy install.** `npx hamlet-village` runs the daemon and serves the built web UI without a
+  clone. The browser signs in once through a one-time link printed in the terminal.
 
 ## Next
 
-### Chat view
+### Menubar app
 
-Open a session's conversation from its bot.
-
-1. **Send messages:** type into the session from the app. To start, this injects text into the
-   session's cmux surface. Windows Terminal, IDE and desktop-app sessions stay read-only, and the
-   input box says why.
-
-### Subagent helpers
-
-Show subagents as small villagers that follow the main bot (`SubagentStart` / `SubagentStop`). A
-subagent's permission prompt shows on its helper.
-
-### Easy install
-
-- `npx hamlet` (or a global install) that runs the daemon and serves the built web UI, without
-  cloning the repo.
-- Later: a menubar or tray app that starts on login.
+A menubar or tray app that starts Hamlet on login.
 
 ## Later / ideas
 

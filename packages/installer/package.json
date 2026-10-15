@@ -4,9 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "bin": {
-    "hamlet": "./src/cli.ts"
-  },
+  "exports": "./src/cli.ts",
   "scripts": {
     "start": "tsx src/cli.ts",
     "test": "tsx --test src/*.test.ts"

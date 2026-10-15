@@ -8,10 +8,9 @@ const SPRING: { type: "spring"; visualDuration: number; bounce: number } = { typ
 const FIRM = { ...SPRING, bounce: 0 };
 // Ends are spelled out in full: Motion reads "none" as all zeros, which would scale to nothing.
 // Opacity goes as numbers: given strings, Motion jumps straight to the end.
-const FULL = "inset(0px 0px 0px 0px round 0px)";
-const PROPS = ["opacity", "transform", "height", "overflow", "clip-path"];
+const PROPS = ["opacity", "transform", "height", "overflow"];
 
-type Frames = { opacity?: [number, number] } & Partial<Record<"transform" | "height" | "clipPath", [string, string]>>;
+type Frames = { opacity?: [number, number] } & Partial<Record<"transform" | "height", [string, string]>>;
 
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 /** The effect running on each element, so a new one takes over instead of fighting it. */
@@ -50,23 +49,16 @@ async function settle(el: HTMLElement, frames: Frames, spring = SPRING): Promise
   return true;
 }
 
-/** A clip-path that shows only `r` within `box`, or a point at its centre when there's no `r`. */
-export function insetOf(r: { top: number; right: number; bottom: number; left: number } | undefined, box: { width: number; height: number; top: number; left: number }): string {
-  if (!r) return `inset(${box.height / 2}px ${box.width / 2}px ${box.height / 2}px ${box.width / 2}px round 4px)`;
-  const top = r.top - box.top, left = r.left - box.left;
-  return `inset(${top}px ${box.width - (r.right - box.left)}px ${box.height - (r.bottom - box.top)}px ${left}px round 4px)`;
+/** The chat sheet slides in from the right edge; mid-slide-out it turns around where it is. */
+export function slideIn(el: HTMLElement): Promise<boolean> {
+  const now = running.has(el) ? getComputedStyle(el).transform : "none";
+  return settle(el, { transform: [now === "none" ? "translateX(100%)" : now, "translateX(0px)"] });
 }
 
-/** An overlay grows out of `from` (a rect on screen) to fill its box; mid-shrink it turns around where it is. */
-export function growFrom(el: HTMLElement, from: DOMRect | undefined): Promise<boolean> {
-  const start = running.has(el) ? getComputedStyle(el).clipPath : insetOf(from, el.getBoundingClientRect());
-  return settle(el, { clipPath: [start, FULL] });
-}
-
-/** The reverse of growFrom: the overlay shrinks back into `to`. The caller hides it once this resolves true. */
-export function shrinkTo(el: HTMLElement, to: DOMRect | undefined): Promise<boolean> {
-  const now = getComputedStyle(el).clipPath;
-  return settle(el, { clipPath: [now === "none" ? FULL : now, insetOf(to, el.getBoundingClientRect())] });
+/** The reverse: the sheet slides out to the right. The caller hides it once this resolves true. */
+export function slideOut(el: HTMLElement): Promise<boolean> {
+  const now = getComputedStyle(el).transform;
+  return settle(el, { transform: [now === "none" ? "translateX(0px)" : now, "translateX(100%)"] });
 }
 
 /** New entries fade in and rise into place, one after another. */

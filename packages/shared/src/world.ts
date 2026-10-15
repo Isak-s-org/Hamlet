@@ -6,6 +6,16 @@ export interface PendingPermission {
   toolName: string;
   toolInput: unknown;
   cwd: string;
+  /** The subagent asking, so the prompt shows on its helper. Unset for the main thread. */
+  agentId?: string;
+}
+
+/** A subagent the session is running, shown as a small villager following its bot. */
+export interface Helper {
+  agentId: string;
+  /** The subagent's type, such as "Explore". */
+  type?: string;
+  activity?: string;
 }
 
 export interface Bot {
@@ -21,6 +31,8 @@ export interface Bot {
   /** ms epoch of the last state change; the waiting tray sorts on it. */
   since: number;
   permission?: PendingPermission;
+  /** Subagents running now, from SubagentStart until SubagentStop. */
+  helpers?: Helper[];
   /** Where the session's terminal lives, from the hook headers. Absent when we can't focus it. */
   terminal?: { kind: "cmux"; surfaceId: string; workspaceId: string } | { kind: "wt"; session: string };
 }
@@ -57,5 +69,39 @@ export type ChatEntry = { uuid: string; at: string; parent?: string } & (
   | { kind: "notice"; text: string; level: "info" | "error" }
 );
 
+/** A subagent of the session, from its own transcript. `parent` is the Agent call that started it. */
+export interface Subagent {
+  agentId: string;
+  parent: string;
+  type?: string;
+  description?: string;
+  /** Tokens in its latest turn, input and cache included: the total Claude Code reports when it finishes. */
+  tokens: number;
+  tools: number;
+  /** Timestamps of its first and latest transcript lines. */
+  start?: string;
+  last?: string;
+  /** Its Agent call came back as an error. */
+  failed?: boolean;
+}
+
+/** One entry of the chat's "/" menu. */
+export interface Command {
+  name: string;
+  description: string;
+}
+
 /** One message of GET /api/sessions/:id/chat. */
-export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" };
+/** `queued`: messages typed while Claude works, oldest first, waiting for the turn to take them. */
+export type ChatEvent = { entries: ChatEntry[] } | { reset: true } | { error: "no-transcript" | "unreadable" } | { commands: Command[] } | { queued: string[] } | { subagents: Subagent[] };
+
+/** Longest message POST /api/sessions/:id/send takes, in UTF-8 bytes. */
+export const SEND_CAP = 64 * 1024;
+
+/** Built-ins that run without a picker in the terminal. The transcript's listing doesn't have built-ins. */
+export const BUILTIN_COMMANDS: Command[] = [
+  { name: "clear", description: "Clear the conversation and start fresh" },
+  { name: "compact", description: "Summarize the conversation to free context; optional focus instructions" },
+  { name: "context", description: "Show how the context window is used" },
+  { name: "cost", description: "Show this session's cost and duration" },
+];
